@@ -43,6 +43,9 @@ class AppConfig(BaseModel):
     headless: bool = Field(default=False)
 
     allowed_domains: list[str] = Field(default_factory=list)
+    # CTF-only convenience: treat every host as in-scope. OFF by default;
+    # disables the target-scope safety net (not the research SSRF guard).
+    allow_all_domains: bool = Field(default=False)
     flag_regexes: list[str] = Field(default_factory=lambda: list(DEFAULT_FLAG_REGEXES))
 
     # fallback LLM backend when no ANTHROPIC_API_KEY: the Claude Code CLI

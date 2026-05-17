@@ -777,7 +777,8 @@ class MainWindow(QMainWindow):
         # respect the allowed-domain allowlist; offer to add the host
         try:
             Permissions(Path(self.config.projects_dir),
-                        self.config.allowed_domains).check_url(url)
+                        self.config.allowed_domains,
+                        allow_all=self.config.allow_all_domains).check_url(url)
         except PermissionDenied:
             from urllib.parse import urlparse
 
@@ -1133,7 +1134,12 @@ class MainWindow(QMainWindow):
                 "agent asks you each step). Set a key or install the CLI for "
                 "autonomous solving."
             )
-        if not self.config.allowed_domains:
+        if self.config.allow_all_domains:
+            notes.append(
+                "ALL domains allowed (target-scope safety off) — CTF-only "
+                "mode. Disable in Settings to restrict to an allowlist."
+            )
+        elif not self.config.allowed_domains:
             notes.append(
                 "No allowed domains — browser navigation and network tools "
                 "are blocked until you add the CTF host in Settings."

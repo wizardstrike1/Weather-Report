@@ -31,6 +31,10 @@ class SettingsDialog(QDialog):
         self.summarize_n.setRange(2, 100)
         self.summarize_n.setValue(config.summarize_after_n_messages)
         self.allowed = QLineEdit(", ".join(config.allowed_domains))
+        self.allow_all = QCheckBox(
+            "Allow ALL domains (CTF-only — disables target-scope safety)"
+        )
+        self.allow_all.setChecked(config.allow_all_domains)
         self.flag_re = QLineEdit(" | ".join(config.flag_regexes))
         self.profile = QLineEdit(config.browser_profile_dir)
         self.headless = QCheckBox("Run browser headless")
@@ -68,6 +72,7 @@ class SettingsDialog(QDialog):
         form.addRow("Max tokens / step", self.max_tokens)
         form.addRow("Summarize after N", self.summarize_n)
         form.addRow("Allowed domains (comma-sep)", self.allowed)
+        form.addRow(self.allow_all)
         form.addRow("Flag regexes ( | -sep)", self.flag_re)
         form.addRow("Browser profile dir", self.profile)
         form.addRow(self.headless)
@@ -95,6 +100,7 @@ class SettingsDialog(QDialog):
         c.allowed_domains = [
             d.strip() for d in self.allowed.text().split(",") if d.strip()
         ]
+        c.allow_all_domains = self.allow_all.isChecked()
         c.flag_regexes = [
             r.strip() for r in self.flag_re.text().split("|") if r.strip()
         ]
