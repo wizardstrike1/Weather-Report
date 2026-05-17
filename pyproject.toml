@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctf-copilot"
+version = "0.1.0"
+description = "Desktop assistant for solving authorized Capture-the-Flag challenges"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    "PySide6>=6.6",
+    "playwright>=1.44",
+    "anthropic>=0.40",
+    "pydantic>=2.6",
+    "loguru>=0.7",
+    "python-dotenv>=1.0",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+analysis = ["scapy>=2.5", "pillow>=10.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+ctf-copilot = "ctf_copilot.app:main"
+
+[tool.setuptools.packages.find]
+include = ["ctf_copilot*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Toy CTF — Login</title></head>
+<body>
+  <h1>Toy CTF challenge</h1>
+  <p>Find the flag. Maybe check what the page is hiding.</p>
+
+  <!-- TODO(dev): remove debug creds before prod ;)  user=admin pass=letmein -->
+  <form id="login" action="/login" method="post">
+    <input name="username" placeholder="username">
+    <input name="password" type="password" placeholder="password">
+    <input type="hidden" name="csrf" value="toytoken">
+    <button type="submit">Log in</button>
+  </form>
+
+  <a href="/files/challenge.txt" id="dl">download challenge file</a>
+  <!-- flag{toy_html_comment_flag} -->
+</body>
+</html>

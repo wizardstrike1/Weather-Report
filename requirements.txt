@@ -1,0 +1,16 @@
+# Core runtime dependencies for CTF Copilot
+PySide6>=6.6
+playwright>=1.44
+anthropic>=0.40
+pydantic>=2.6
+loguru>=0.7
+python-dotenv>=1.0
+rich>=13.7
+
+# Optional analysis extras (recommended)
+scapy>=2.5
+pillow>=10.0
+
+# Dev / test
+pytest>=8.0
+pytest-asyncio>=0.23
