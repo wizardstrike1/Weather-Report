@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -59,6 +60,67 @@ def read_status(root: Path) -> str:
 def slugify(name: str) -> str:
     slug = _SLUG_RE.sub("-", name.strip().lower()).strip("-")
     return slug or "challenge"
+
+
+def _comp_slug(competition: str) -> str:
+    return slugify(competition) if competition.strip() else "_ungrouped"
+
+
+def _set_persisted(root: Path, **meta: str) -> None:
+    """Write fields to BOTH project.json and the state meta table without
+    constructing a StateStore. Caller must ensure the project is not open."""
+    mf = root / "project.json"
+    try:
+        data = json.loads(mf.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data.update(meta)
+    mf.write_text(json.dumps(data, indent=2), "utf-8")
+    try:
+        con = sqlite3.connect(root / "state.sqlite")
+        for k, v in meta.items():
+            con.execute(
+                "INSERT INTO meta(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (k, v),
+            )
+        con.commit()
+        con.close()
+    except sqlite3.Error:
+        pass
+
+
+def move_project(root: Path, projects_dir: Path, new_competition: str) -> Path:
+    """Move a project's folder into another competition group and update its
+    persisted competition. The project MUST be closed first (Windows file
+    locks). Returns the new root."""
+    dest_dir = projects_dir / _comp_slug(new_competition)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / root.name
+    n = 1
+    while dest.exists():
+        dest = dest_dir / f"{root.name}-{n}"
+        n += 1
+    shutil.move(str(root), str(dest))
+    _set_persisted(dest, competition=new_competition)
+    return dest
+
+
+def rename_group(projects_dir: Path, old_competition: str,
+                 new_competition: str) -> int:
+    """Re-label every project in a competition group. Returns count moved."""
+    roots = [
+        p.parent for p in projects_dir.rglob("project.json")
+        if read_card(p.parent)["competition"] == old_competition.strip()
+    ]
+    for r in roots:
+        move_project(r, projects_dir, new_competition)
+    return len(roots)
+
+
+def delete_project(root: Path) -> None:
+    """Remove a project tree. The project MUST be closed first."""
+    shutil.rmtree(root, ignore_errors=True)
 
 
 @dataclass

@@ -46,7 +46,9 @@ sandboxed runner, and produces a Markdown/HTML writeup when solved.
   `/api/v1/challenges` + generic link heuristics) and bulk-creates a project
   per challenge, **grouped by competition** in a collapsible tree sidebar
   with category + status per challenge (categories also settable on manual
-  New-challenge).
+  New-challenge). Right-click the tree to start/pause/stop a challenge,
+  rename/delete challenges, rename/delete groups, or make a new one; drag a
+  challenge onto another group to move it.
 - **Self-update:** checks the git remote on startup and every 30 min; when
   the checkout is behind, an "Update & Restart" banner appears. Pressing it
   pauses/stops the solver + browser, saves state, `git pull --ff-only`s, and

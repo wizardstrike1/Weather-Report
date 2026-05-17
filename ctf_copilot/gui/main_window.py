@@ -1,6 +1,7 @@
 """Main window: project sidebar, tabbed panels, solver controls, event wiring."""
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 import webbrowser
@@ -22,6 +23,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QCheckBox,
     QPushButton,
+    QAbstractItemView,
+    QMenu,
     QStatusBar,
     QTabWidget,
     QVBoxLayout,
@@ -111,6 +114,44 @@ class ScanWorker(QThread):
                     pass
 
 
+class ProjectTree(QTreeWidget):
+    """Tree of competitions -> challenges with drag-drop of a challenge onto
+    another competition group."""
+
+    move_requested = Signal(str, str)  # project_root_path, dest_competition
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setHeaderHidden(True)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+
+    def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        src = self.currentItem()
+        tgt = self.itemAt(event.position().toPoint())
+        event.ignore()  # we move on disk ourselves, not in the view
+        if not src:
+            return
+        sd = src.data(0, Qt.ItemDataRole.UserRole) or {}
+        if sd.get("type") != "proj":
+            return
+        # resolve the destination competition (a group, or a leaf's group)
+        if tgt is None:
+            return
+        td = tgt.data(0, Qt.ItemDataRole.UserRole) or {}
+        if td.get("type") == "group":
+            dest = td.get("competition", "")
+        elif td.get("type") == "proj" and tgt.parent():
+            dest = (tgt.parent().data(0, Qt.ItemDataRole.UserRole)
+                    or {}).get("competition", "")
+        else:
+            return
+        self.move_requested.emit(sd.get("path", ""), dest)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig, bus: EventBus) -> None:
         super().__init__()
@@ -125,16 +166,20 @@ class MainWindow(QMainWindow):
         self.resize(1280, 860)
 
         # --- sidebar dock (tree grouped by CTF competition) ---
-        self.sidebar = QTreeWidget()
-        self.sidebar.setHeaderHidden(True)
+        self.sidebar = ProjectTree()
         self.sidebar.itemDoubleClicked.connect(self._open_selected_project)
+        self.sidebar.move_requested.connect(self._move_project_to_group)
+        self.sidebar.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.sidebar.customContextMenuRequested.connect(self._sidebar_menu)
         dock = QDockWidget("Projects", self)
         sw = QWidget()
         sl = QVBoxLayout(sw)
         sl.addWidget(QLabel("Projects (grouped by competition)"))
         sl.addWidget(self.sidebar)
         new_btn = QPushButton("New challenge")
-        new_btn.clicked.connect(self._new_project)
+        new_btn.clicked.connect(lambda: self._new_project())
         imp_btn = QPushButton("Import site (scan for challenges)…")
         imp_btn.clicked.connect(self._import_site)
         sl.addWidget(new_btn)
@@ -228,7 +273,7 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         m = self.menuBar().addMenu("&File")
         a_new = QAction("New challenge", self, shortcut=QKeySequence.StandardKey.New)
-        a_new.triggered.connect(self._new_project)
+        a_new.triggered.connect(lambda: self._new_project())
         a_save = QAction("Save project", self,
                          shortcut=QKeySequence.StandardKey.Save)
         a_save.triggered.connect(lambda: self._persist_challenge_inputs(notify=True))
@@ -349,7 +394,8 @@ class MainWindow(QMainWindow):
     # ---- project lifecycle ----------------------------------------------
     def _refresh_projects(self) -> None:
         cur = self.sidebar.currentItem()
-        selected = cur.data(0, Qt.ItemDataRole.UserRole) if cur else None
+        sel = (cur.data(0, Qt.ItemDataRole.UserRole) or {}) if cur else {}
+        sel_path = sel.get("path")
         self.sidebar.clear()
         root = Path(self.config.projects_dir)
 
@@ -362,31 +408,32 @@ class MainWindow(QMainWindow):
         restore = None
         for comp in sorted(groups, key=lambda c: (c == "Ungrouped", c.lower())):
             members = sorted(groups[comp], key=lambda t: t[1]["name"].lower())
-            solved = sum(
-                1 for _, c in members if c["status"] == "solved"
-            )
-            top = QTreeWidgetItem(
-                [f"{comp}   ({solved}/{len(members)} solved)"]
-            )
+            solved = sum(1 for _, c in members if c["status"] == "solved")
+            top = QTreeWidgetItem([f"{comp}   ({solved}/{len(members)} solved)"])
             f = top.font(0)
             f.setBold(True)
             top.setFont(0, f)
+            top.setData(0, Qt.ItemDataRole.UserRole,
+                        {"type": "group",
+                         "competition": "" if comp == "Ungrouped" else comp})
+            top.setFlags(top.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
             self.sidebar.addTopLevelItem(top)
             for proj_root, c in members:
                 cat = c["category"] or "uncat"
                 lbl = STATUS_LABELS.get(c["status"], c["status"])
-                leaf = QTreeWidgetItem(
-                    [f"[{cat}] {c['name']}   —   [{lbl}]"]
-                )
-                leaf.setData(0, Qt.ItemDataRole.UserRole, str(proj_root))
+                leaf = QTreeWidgetItem([f"[{cat}] {c['name']}   —   [{lbl}]"])
+                leaf.setData(0, Qt.ItemDataRole.UserRole,
+                             {"type": "proj", "path": str(proj_root),
+                              "name": c["name"]})
+                leaf.setFlags(leaf.flags() & ~Qt.ItemFlag.ItemIsDropEnabled)
                 top.addChild(leaf)
-                if str(proj_root) == selected:
+                if str(proj_root) == sel_path:
                     restore = leaf
         self.sidebar.expandAll()
         if restore:
             self.sidebar.setCurrentItem(restore)
 
-    def _new_project(self) -> None:
+    def _new_project(self, default_comp: str = "") -> None:
         name, ok = QInputDialog.getText(self, "New challenge", "Challenge name:")
         if not ok or not name.strip():
             return
@@ -396,6 +443,7 @@ class MainWindow(QMainWindow):
         competition, _ = QInputDialog.getText(
             self, "New challenge",
             "Competition / event name (optional — groups the project):",
+            text=default_comp,
         )
         self._persist_challenge_inputs()  # save current before switching
         proj = Project.create(
@@ -405,16 +453,210 @@ class MainWindow(QMainWindow):
         self._load_project(proj)
         self._refresh_projects()
 
+    def _item_path(self, item) -> str | None:
+        d = item.data(0, Qt.ItemDataRole.UserRole) or {} if item else {}
+        return d.get("path") if d.get("type") == "proj" else None
+
     def _open_selected_project(self) -> None:
         item = self.sidebar.currentItem()
         if not item:
             return
-        path = item.data(0, Qt.ItemDataRole.UserRole)
+        path = self._item_path(item)
         if not path:  # a competition group header — just toggle it
             item.setExpanded(not item.isExpanded())
             return
+        if self.project and str(self.project.root) == path:
+            return  # already open
         self._persist_challenge_inputs()  # save current before switching
         self._load_project(Project.open(Path(path)))
+
+    # ---- sidebar context menu + management ------------------------------
+    def _sidebar_menu(self, pos) -> None:
+        item = self.sidebar.itemAt(pos)
+        data = (item.data(0, Qt.ItemDataRole.UserRole) or {}) if item else {}
+        menu = QMenu(self)
+
+        if data.get("type") == "proj":
+            path = data["path"]
+            is_cur = bool(self.project and str(self.project.root) == path)
+            running = bool(self.worker and self.worker.isRunning())
+            menu.addAction("Open", lambda: self._open_path(path))
+            menu.addAction(
+                "Start solving (auto)", lambda: self._start_path(path)
+            )
+            if is_cur and running:
+                paused = self.solver and self.solver.controls.paused
+                menu.addAction("Resume" if paused else "Pause",
+                               self._toggle_pause)
+                menu.addAction("Stop", self._stop)
+            menu.addSeparator()
+            menu.addAction("Rename…", lambda: self._rename_project(path))
+            move = menu.addMenu("Move to group")
+            for comp in self._all_groups():
+                lbl = comp or "Ungrouped"
+                move.addAction(
+                    lbl, lambda c=comp: self._move_project_to_group(path, c)
+                )
+            move.addAction("New group…",
+                           lambda: self._move_project_new_group(path))
+            menu.addSeparator()
+            menu.addAction("Delete challenge",
+                           lambda: self._delete_project(path))
+        elif data.get("type") == "group":
+            comp = data["competition"]
+            menu.addAction(
+                "New challenge in this group…",
+                lambda: self._new_project(default_comp=comp),
+            )
+            menu.addAction("Rename group…",
+                           lambda: self._rename_group(comp))
+            menu.addAction("Delete group (and all its challenges)",
+                           lambda: self._delete_group(comp))
+        else:
+            menu.addAction("New challenge…", lambda: self._new_project())
+
+        if not menu.isEmpty():
+            menu.exec(self.sidebar.viewport().mapToGlobal(pos))
+
+    def _all_groups(self) -> list[str]:
+        root = Path(self.config.projects_dir)
+        seen = {
+            read_card(p.parent)["competition"]
+            for p in root.rglob("project.json")
+        }
+        return sorted(seen, key=lambda c: (c == "", c.lower()))
+
+    def _open_path(self, path: str) -> None:
+        if self.project and str(self.project.root) == path:
+            return
+        self._persist_challenge_inputs()
+        self._load_project(Project.open(Path(path)))
+
+    def _start_path(self, path: str) -> None:
+        self._open_path(path)
+        self._start(auto=True)
+
+    def _release_if_affected(self, paths: list[str]) -> None:
+        """If the active project is among ``paths``, stop its solver and close
+        it so the folder can be moved/deleted (Windows file locks)."""
+        if not self.project:
+            return
+        cur = str(self.project.root)
+        if any(cur == p or cur.startswith(p + os.sep) for p in paths):
+            if self.solver:
+                self.solver.controls.stop = True
+            if self.worker and self.worker.isRunning():
+                self.worker.wait(6000)
+            if self.solver:
+                try:
+                    self.solver.shutdown()
+                except Exception:
+                    pass
+            try:
+                self.project.close()
+            except Exception:
+                pass
+            self.project = None
+            self.solver = None
+            self.setWindowTitle("CTF Copilot")
+
+    def _rename_project(self, path: str) -> None:
+        from ..core.project import read_card
+
+        old = read_card(Path(path))["name"]
+        name, ok = QInputDialog.getText(
+            self, "Rename challenge", "New name:", text=old
+        )
+        if not ok or not name.strip():
+            return
+        self._release_if_affected([path])
+        from ..core.project import _set_persisted
+
+        _set_persisted(Path(path), name=name.strip())
+        self._refresh_projects()
+        self._status(f"Renamed to '{name.strip()}'")
+
+    def _move_project_new_group(self, path: str) -> None:
+        comp, ok = QInputDialog.getText(
+            self, "Move to new group", "New competition / group name:"
+        )
+        if ok and comp.strip():
+            self._move_project_to_group(path, comp.strip())
+
+    def _move_project_to_group(self, path: str, competition: str) -> None:
+        from ..core.project import move_project
+
+        self._release_if_affected([path])
+        try:
+            new_root = move_project(
+                Path(path), Path(self.config.projects_dir), competition
+            )
+        except OSError as e:
+            QMessageBox.warning(self, "Move failed", str(e))
+            return
+        self._refresh_projects()
+        self._status(
+            f"Moved to '{competition or 'Ungrouped'}'  ({new_root.name})"
+        )
+
+    def _rename_group(self, competition: str) -> None:
+        from ..core.project import rename_group
+
+        new, ok = QInputDialog.getText(
+            self, "Rename group", "New group name:",
+            text=competition or "Ungrouped",
+        )
+        if not ok or not new.strip():
+            return
+        # release any open project that lives in this group
+        root = Path(self.config.projects_dir)
+        affected = [
+            str(p.parent) for p in root.rglob("project.json")
+            if read_card(p.parent)["competition"] == competition
+        ]
+        self._release_if_affected(affected)
+        n = rename_group(root, competition, new.strip())
+        self._refresh_projects()
+        self._status(f"Renamed group → '{new.strip()}' ({n} challenge(s))")
+
+    def _delete_project(self, path: str) -> None:
+        from ..core.project import delete_project, read_card
+
+        nm = read_card(Path(path))["name"]
+        if QMessageBox.question(
+            self, "Delete challenge",
+            f"Permanently delete '{nm}' and all its files?\n{path}",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._release_if_affected([path])
+        delete_project(Path(path))
+        self._refresh_projects()
+        self._status(f"Deleted '{nm}'")
+
+    def _delete_group(self, competition: str) -> None:
+        from ..core.project import delete_project
+
+        root = Path(self.config.projects_dir)
+        members = [
+            p.parent for p in root.rglob("project.json")
+            if read_card(p.parent)["competition"] == competition
+        ]
+        if not members:
+            return
+        if QMessageBox.question(
+            self, "Delete group",
+            f"Permanently delete group '{competition or 'Ungrouped'}' and "
+            f"ALL {len(members)} challenge(s) in it?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._release_if_affected([str(m) for m in members])
+        for m in members:
+            delete_project(m)
+        self._refresh_projects()
+        self._status(
+            f"Deleted group '{competition or 'Ungrouped'}' "
+            f"({len(members)} challenge(s))"
+        )
 
     # ---- import an entire site -----------------------------------------
     _IMPORT_MODES = [

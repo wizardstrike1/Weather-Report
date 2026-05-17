@@ -5,7 +5,11 @@ from ctf_copilot.core.project import (
     STATUS_INCOMPLETE,
     STATUS_SOLVED,
     Project,
+    delete_project,
+    move_project,
+    read_card,
     read_status,
+    rename_group,
     slugify,
 )
 from ctf_copilot.writeup import generator
@@ -105,6 +109,48 @@ def test_snapshot_clips_values_and_uses_basenames(tmp_path):
     snap = proj.state.snapshot()
     assert len(snap["facts"][0]) <= 401  # 400 + ellipsis
     assert snap["downloads"] == ["payload.bin"]  # basename only, not full path
+
+
+def test_move_rename_delete_project(tmp_path):
+    a = Project.create(tmp_path, "Chal A", category="web", competition="EventX")
+    b = Project.create(tmp_path, "Chal B", competition="EventX")
+    a.close()
+    b.close()
+    assert read_card(a.root)["competition"] == "EventX"
+
+    # move A into a different group
+    new_root = move_project(a.root, tmp_path, "EventY")
+    assert new_root.exists() and not a.root.exists()
+    card = read_card(new_root)
+    assert card["competition"] == "EventY" and card["name"] == "Chal A"
+    reopened = Project.open(new_root)
+    assert reopened.competition == "EventY"
+    assert reopened.state.get_meta("competition") == "EventY"
+    reopened.close()
+
+    # rename the remaining group (B is still in EventX)
+    n = rename_group(tmp_path, "EventX", "Finals")
+    assert n == 1
+    bcards = [
+        read_card(p.parent) for p in tmp_path.rglob("project.json")
+    ]
+    assert any(c["competition"] == "Finals" for c in bcards)
+    assert not any(c["competition"] == "EventX" for c in bcards)
+
+    # delete A
+    delete_project(new_root)
+    assert not new_root.exists()
+
+
+def test_move_project_dedupes_name_clash(tmp_path):
+    p1 = Project.create(tmp_path, "Dup", competition="G1")
+    p2 = Project.create(tmp_path, "Dup", competition="G2")
+    p1.close()
+    p2.close()
+    moved = move_project(p2.root, tmp_path, "G1")
+    # both now under G1 group, different folder names
+    assert moved.exists() and p1.root.exists()
+    assert moved.name != p1.root.name
 
 
 def test_state_snapshot_is_bounded(tmp_path):
