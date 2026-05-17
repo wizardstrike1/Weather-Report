@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QMainWindow,
     QMessageBox,
     QCheckBox,
@@ -27,10 +27,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core.config import AppConfig
+from ..core.config import APP_DIR, AppConfig
+from ..core.permissions import PermissionDenied, Permissions
 from ..core.events import Event, EventBus, EventType
 from ..core import updater
-from ..core.project import STATUS_LABELS, Project, read_status
+from ..core.project import STATUS_LABELS, Project, read_card, read_status
 from ..core.solver import Solver
 from ..tools import file_analyzer
 from ..tools.registry import ToolRegistry
@@ -67,6 +68,43 @@ class UpdateChecker(QThread):
         self.done.emit(updater.check_for_update())
 
 
+class ScanWorker(QThread):
+    """Drives a headed/headless Playwright session to enumerate challenges."""
+
+    done = Signal(str, object)  # competition, list[ChallengeHit]
+    failed = Signal(str)
+
+    def __init__(self, url: str, profile_dir: Path, headless: bool) -> None:
+        super().__init__()
+        self._url = url
+        self._profile = profile_dir
+        self._headless = headless
+
+    def run(self) -> None:
+        from ..browser.playwright_session import PlaywrightSession
+        from ..core import site_scanner
+
+        sess = None
+        try:
+            sess = PlaywrightSession(
+                profile_dir=self._profile,
+                downloads_dir=self._profile / "dl",
+                screenshots_dir=self._profile / "ss",
+                headless=self._headless,
+            )
+            sess.start()
+            comp, hits = site_scanner.scan(sess, self._url)
+            self.done.emit(comp, hits)
+        except Exception as e:  # noqa: BLE001 - report any failure to the UI
+            self.failed.emit(f"{type(e).__name__}: {e}")
+        finally:
+            if sess is not None:
+                try:
+                    sess.stop()
+                except Exception:
+                    pass
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig, bus: EventBus) -> None:
         super().__init__()
@@ -80,17 +118,21 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("CTF Copilot")
         self.resize(1280, 860)
 
-        # --- sidebar dock ---
-        self.sidebar = QListWidget()
+        # --- sidebar dock (tree grouped by CTF competition) ---
+        self.sidebar = QTreeWidget()
+        self.sidebar.setHeaderHidden(True)
         self.sidebar.itemDoubleClicked.connect(self._open_selected_project)
         dock = QDockWidget("Projects", self)
         sw = QWidget()
         sl = QVBoxLayout(sw)
-        sl.addWidget(QLabel("Projects"))
+        sl.addWidget(QLabel("Projects (grouped by competition)"))
         sl.addWidget(self.sidebar)
         new_btn = QPushButton("New challenge")
         new_btn.clicked.connect(self._new_project)
+        imp_btn = QPushButton("Import site (scan for challenges)…")
+        imp_btn.clicked.connect(self._import_site)
         sl.addWidget(new_btn)
+        sl.addWidget(imp_btn)
         dock.setWidget(sw)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
         self._refresh_projects()
@@ -300,28 +342,60 @@ class MainWindow(QMainWindow):
 
     # ---- project lifecycle ----------------------------------------------
     def _refresh_projects(self) -> None:
-        selected = None
         cur = self.sidebar.currentItem()
-        if cur:
-            selected = cur.data(Qt.ItemDataRole.UserRole)
+        selected = cur.data(0, Qt.ItemDataRole.UserRole) if cur else None
         self.sidebar.clear()
         root = Path(self.config.projects_dir)
-        for p in sorted(root.glob("*/project.json")):
-            folder = p.parent.name
-            status = read_status(p.parent)
-            label = STATUS_LABELS.get(status, status)
-            item = QListWidgetItem(f"{folder}   —   [{label}]")
-            item.setData(Qt.ItemDataRole.UserRole, folder)
-            self.sidebar.addItem(item)
-            if folder == selected:
-                self.sidebar.setCurrentItem(item)
+
+        groups: dict[str, list[tuple[Path, dict]]] = {}
+        for p in sorted(root.rglob("project.json")):
+            card = read_card(p.parent)
+            comp = card["competition"] or "Ungrouped"
+            groups.setdefault(comp, []).append((p.parent, card))
+
+        restore = None
+        for comp in sorted(groups, key=lambda c: (c == "Ungrouped", c.lower())):
+            members = sorted(groups[comp], key=lambda t: t[1]["name"].lower())
+            solved = sum(
+                1 for _, c in members if c["status"] == "solved"
+            )
+            top = QTreeWidgetItem(
+                [f"{comp}   ({solved}/{len(members)} solved)"]
+            )
+            f = top.font(0)
+            f.setBold(True)
+            top.setFont(0, f)
+            self.sidebar.addTopLevelItem(top)
+            for proj_root, c in members:
+                cat = c["category"] or "uncat"
+                lbl = STATUS_LABELS.get(c["status"], c["status"])
+                leaf = QTreeWidgetItem(
+                    [f"[{cat}] {c['name']}   —   [{lbl}]"]
+                )
+                leaf.setData(0, Qt.ItemDataRole.UserRole, str(proj_root))
+                top.addChild(leaf)
+                if str(proj_root) == selected:
+                    restore = leaf
+        self.sidebar.expandAll()
+        if restore:
+            self.sidebar.setCurrentItem(restore)
 
     def _new_project(self) -> None:
         name, ok = QInputDialog.getText(self, "New challenge", "Challenge name:")
         if not ok or not name.strip():
             return
+        category, _ = QInputDialog.getText(
+            self, "New challenge", "Category (web, pwn, crypto, …; optional):"
+        )
+        competition, _ = QInputDialog.getText(
+            self, "New challenge",
+            "Competition / event name (optional — groups the project):",
+        )
         self._persist_challenge_inputs()  # save current before switching
-        proj = Project.create(Path(self.config.projects_dir), name.strip())
+        proj = Project.create(
+            Path(self.config.projects_dir), name.strip(),
+            category=category.strip(), competition=competition.strip(),
+        )
         self._load_project(proj)
         self._refresh_projects()
 
@@ -329,10 +403,93 @@ class MainWindow(QMainWindow):
         item = self.sidebar.currentItem()
         if not item:
             return
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        if not path:  # a competition group header — just toggle it
+            item.setExpanded(not item.isExpanded())
+            return
         self._persist_challenge_inputs()  # save current before switching
-        folder = item.data(Qt.ItemDataRole.UserRole) or item.text()
-        root = Path(self.config.projects_dir) / folder
-        self._load_project(Project.open(root))
+        self._load_project(Project.open(Path(path)))
+
+    # ---- import an entire site -----------------------------------------
+    def _import_site(self) -> None:
+        url, ok = QInputDialog.getText(
+            self, "Import site",
+            "CTF site URL (CTFd / challenge listing). Log in first if it "
+            "needs auth — a browser profile persists across scans:",
+        )
+        url = (url or "").strip()
+        if not ok or not url:
+            return
+        if "://" not in url:
+            url = "http://" + url
+
+        # respect the allowed-domain allowlist; offer to add the host
+        try:
+            Permissions(Path(self.config.projects_dir),
+                        self.config.allowed_domains).check_url(url)
+        except PermissionDenied:
+            from urllib.parse import urlparse
+
+            host = urlparse(url).hostname or ""
+            if QMessageBox.question(
+                self, "Add to allowed domains?",
+                f"'{host}' is not in your allowed domains. Add it so the "
+                f"scanner (and the agent) may access it?",
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            self.config.allowed_domains.append(host)
+            self.config.save()
+
+        if getattr(self, "_scan_thread", None) and self._scan_thread.isRunning():
+            QMessageBox.information(self, "Scan", "A scan is already running.")
+            return
+        self._status(f"Scanning {url} for challenges…")
+        self._scan_thread = ScanWorker(
+            url, APP_DIR / "import-profile", self.config.headless
+        )
+        self._scan_thread.done.connect(self._on_scan_done)
+        self._scan_thread.failed.connect(
+            lambda m: (self._status("Scan failed"),
+                       QMessageBox.warning(self, "Scan failed", m))
+        )
+        self._scan_thread.start()
+
+    def _on_scan_done(self, competition: str, hits: list) -> None:
+        if not hits:
+            self._status("Scan: no challenges found")
+            QMessageBox.information(
+                self, "Import site",
+                "No challenges detected. If the site needs login, run the "
+                "scan again after logging in (the import browser profile "
+                "persists), or add challenges manually.",
+            )
+            return
+        comp, ok = QInputDialog.getText(
+            self, "Import site",
+            f"Found {len(hits)} challenge(s). Competition name to group them:",
+            text=competition or "Imported CTF",
+        )
+        if not ok:
+            return
+        comp = comp.strip() or (competition or "Imported CTF")
+        created = 0
+        for h in hits:
+            try:
+                Project.create(
+                    Path(self.config.projects_dir), h.name,
+                    category=(h.category or "unknown"),
+                    url=h.url, competition=comp,
+                )
+                created += 1
+            except Exception as e:  # one bad entry shouldn't abort the batch
+                self.bus.log(f"skip {h.name!r}: {e}", "error")
+        self._refresh_projects()
+        self._status(f"Imported {created} challenge(s) into '{comp}'")
+        QMessageBox.information(
+            self, "Import site",
+            f"Imported {created} challenge(s) under '{comp}'. They're grouped "
+            f"in the Projects panel — double-click one to start.",
+        )
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self._persist_challenge_inputs()

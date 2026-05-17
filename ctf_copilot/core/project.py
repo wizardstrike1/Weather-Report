@@ -28,6 +28,20 @@ STATUS_LABELS = {
 }
 
 
+def read_card(root: Path) -> dict:
+    """Cheap metadata for the sidebar tree (no StateStore construction)."""
+    try:
+        m = json.loads((root / "project.json").read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        m = {}
+    return {
+        "name": m.get("name", root.name),
+        "competition": (m.get("competition") or "").strip(),
+        "category": (m.get("category") or "").strip(),
+        "status": read_status(root),
+    }
+
+
 def read_status(root: Path) -> str:
     """Cheaply read a project's status without constructing a StateStore
     (used by the sidebar to show a badge per project)."""
@@ -55,6 +69,7 @@ class Project:
     url: str
     flag_format: str
     state: StateStore
+    competition: str = ""  # grouping label (CTF event); "" = Ungrouped
 
     @property
     def downloads_dir(self) -> Path:
@@ -85,18 +100,27 @@ class Project:
         category: str = "",
         url: str = "",
         flag_format: str = "flag{...}",
+        competition: str = "",
     ) -> "Project":
-        root = projects_dir / slugify(name)
+        # Group projects on disk by competition slug so bulk-imported events
+        # stay tidy and folder names don't collide across events.
+        comp_slug = slugify(competition) if competition else "_ungrouped"
+        root = projects_dir / comp_slug / slugify(name)
+        n = 1
+        while root.exists():
+            root = projects_dir / comp_slug / f"{slugify(name)}-{n}"
+            n += 1
         root.mkdir(parents=True, exist_ok=True)
         for sub in SUBDIRS:
             (root / sub).mkdir(exist_ok=True)
         state = StateStore(root / "state.sqlite")
-        proj = cls(root, name, category, url, flag_format, state)
+        proj = cls(root, name, category, url, flag_format, state, competition)
         for key, val in (
             ("name", name),
             ("category", category),
             ("url", url),
             ("flag_format", flag_format),
+            ("competition", competition),
             ("status", STATUS_INCOMPLETE),
         ):
             state.set_meta(key, val)
@@ -114,6 +138,7 @@ class Project:
             url=manifest.get("url", ""),
             flag_format=manifest.get("flag_format", "flag{...}"),
             state=state,
+            competition=manifest.get("competition", ""),
         )
 
     def _write_manifest(self) -> None:
@@ -124,6 +149,7 @@ class Project:
                     "category": self.category,
                     "url": self.url,
                     "flag_format": self.flag_format,
+                    "competition": self.competition,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 },
                 indent=2,

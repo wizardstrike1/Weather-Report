@@ -39,6 +39,11 @@ sandboxed runner, and produces a Markdown/HTML writeup when solved.
 - **Token usage tracker** in the toolbar (session / budget / project total).
 - **Multi-instance safe:** per-project browser profiles, WAL-mode SQLite,
   atomic config writes — run several instances/projects at once.
+- **Import a whole site:** point it at a CTF platform URL and it scans for
+  challenges (CTFd `/api/v1/challenges` + generic link heuristics) and
+  bulk-creates a project per challenge. Projects are **grouped by
+  competition** in a collapsible tree sidebar, with category + status shown
+  per challenge (categories are also settable on manual New-challenge).
 - **Self-update:** checks the git remote on startup and every 30 min; when
   the checkout is behind, an "Update & Restart" banner appears. Pressing it
   pauses/stops the solver + browser, saves state, `git pull --ff-only`s, and
