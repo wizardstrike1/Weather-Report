@@ -92,17 +92,20 @@ class ClaudeClient:
 
     def vision(self, image_path: str, prompt: str,
                budget: TokenBudget) -> str:
-        """Send ONE image to Claude and return its textual reading.
+        """Return Claude's textual reading of ONE image.
 
-        API backend only — Claude has no audio modality and the CLI/manual
-        backends have no image input, so they return a clear note. The image
-        is Pillow-downscaled to <=1024px JPEG to bound tokens; gated upstream
-        by the send_screenshots toggle.
+        - API backend: send the image as a base64 block (downscaled).
+        - CLI backend: drive `claude -p --allowedTools Read` and have Claude
+          Code open the image file itself (it is multimodal + has a Read
+          tool) — so vision works WITHOUT an API key.
+        - manual (no key, no CLI): a clear note.
+        Gated upstream by the send_screenshots toggle.
         """
+        if self.backend == "cli":
+            return self._vision_cli(image_path, prompt, budget)
         if self.backend != "api" or self._client is None:
-            return ("vision unavailable on this backend (need an "
-                    "ANTHROPIC_API_KEY / API mode). Use OCR/zbarimg/strings "
-                    "or describe via other tools instead.")
+            return ("vision unavailable: no ANTHROPIC_API_KEY and no `claude` "
+                    "CLI. Use zbarimg/strings or describe via other tools.")
         try:
             import base64
             import io
@@ -137,6 +140,43 @@ class ClaudeClient:
             return text.strip() or "(model returned no text)"
         except Exception as e:  # noqa: BLE001
             return f"vision error: {e}"
+
+    def _vision_cli(self, image_path: str, prompt: str,
+                    budget: TokenBudget) -> str:
+        """Claude Code can read image files via its Read tool — verified it
+        OCRs spectrograms/frames. Run it non-interactively with Read allowed."""
+        import json
+        import os
+
+        ip = os.path.abspath(image_path)
+        ask = (f"Use the Read tool on the image file {ip} and then: {prompt}\n"
+               "Reply with only the requested text, no preamble.")
+        try:
+            proc = subprocess.run(
+                [self._cli_path, "-p", "--output-format", "json",
+                 "--allowedTools", "Read"],
+                input=ask, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=120, shell=False,
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            return f"vision (CLI) failed: {e}"
+        out = (proc.stdout or "").strip()
+        if proc.returncode != 0 or not out:
+            return (f"vision (CLI) no output (rc={proc.returncode}). "
+                    f"{(proc.stderr or '').strip()[:200]}")
+        text = out
+        try:
+            env = json.loads(out)
+            if isinstance(env, dict) and "result" in env:
+                text = str(env["result"]).strip()
+                u = env.get("usage") or {}
+                budget.record(int(u.get("input_tokens", 0) or 0)
+                              or estimate_tokens(ask),
+                              int(u.get("output_tokens", 0) or 0)
+                              or estimate_tokens(text))
+        except (json.JSONDecodeError, ValueError):
+            budget.record(estimate_tokens(ask), estimate_tokens(text))
+        return text or "(model returned no text)"
 
     # ---- backends --------------------------------------------------------
     def _complete_api(self, user_message: str, budget: TokenBudget) -> LLMCallResult:

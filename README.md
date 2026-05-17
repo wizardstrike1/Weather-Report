@@ -65,6 +65,8 @@ sandboxed runner, and produces a Markdown/HTML writeup when solved.
   tools. **`vision.look`** sends a generated spectrogram/frame image to
   Claude to actually *read* a hidden flag/QR (Claude has no audio modality;
   this is the comprehension path) — gated by the send-screenshots toggle.
+  Works **without an API key**: on the `claude` CLI backend it drives
+  `claude -p --allowedTools Read` so Claude Code opens the image itself.
 - **Prompt-injection guardrail:** attacker-controlled text (web pages, tool
   output, file contents, socket data) is wrapped `<untrusted>…</untrusted>`
   with injected role/system markers defanged.
