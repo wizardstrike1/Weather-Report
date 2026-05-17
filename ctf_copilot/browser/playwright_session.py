@@ -112,5 +112,24 @@ class PlaywrightSession:
         page.screenshot(path=str(out), full_page=False)
         return str(out)
 
+    def fetch_json(self, url: str) -> Any | None:
+        """Same-origin fetch from within the page (inherits session cookies).
+        Used by the site scanner to read e.g. CTFd's /api/v1/challenges."""
+        page = self._ensure()
+        try:
+            return page.evaluate(
+                """async (u) => {
+                    try {
+                        const r = await fetch(u, {credentials:'include',
+                            headers:{'Accept':'application/json'}});
+                        if (!r.ok) return null;
+                        return await r.json();
+                    } catch (e) { return null; }
+                }""",
+                url,
+            )
+        except Exception:
+            return None
+
     def observe(self, include_storage_values: bool = False) -> dict[str, Any]:
         return observe(self._ensure(), include_storage_values=include_storage_values)
