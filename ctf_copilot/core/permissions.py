@@ -17,10 +17,15 @@ class PermissionDenied(Exception):
 
 
 class Permissions:
-    def __init__(self, workspace: Path, allowed_domains: list[str]) -> None:
+    def __init__(self, workspace: Path, allowed_domains: list[str],
+                 allow_all: bool = False) -> None:
         self.workspace = workspace.resolve()
         # store lowercased, strip leading dots
         self.allowed_domains = {d.strip().lower().lstrip(".") for d in allowed_domains if d.strip()}
+        # opt-in: treat every host as in-scope (authorized-CTF convenience).
+        # Deliberately separate from the web_research SSRF guard, which still
+        # refuses localhost/private/link-local regardless of this flag.
+        self.allow_all = allow_all
 
     # ---- filesystem ------------------------------------------------------
     def resolve_in_workspace(self, candidate: str | Path, *, must_exist: bool = False) -> Path:
@@ -37,6 +42,8 @@ class Permissions:
 
     # ---- network ---------------------------------------------------------
     def _host_allowed(self, host: str) -> bool:
+        if self.allow_all:
+            return True
         host = host.lower().strip("[]")  # strip ipv6 brackets
         if not self.allowed_domains:
             return False

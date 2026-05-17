@@ -50,7 +50,8 @@ class Solver:
         self.project = project
         self.config = config
         self.bus = bus
-        self.perms = Permissions(project.root, config.allowed_domains)
+        self.perms = Permissions(project.root, config.allowed_domains,
+                                 allow_all=config.allow_all_domains)
         self.registry = ToolRegistry(config.tool_paths)
         self.runner = ToolRunner(self.registry, self.perms, project.tool_outputs_dir)
         self.llm = ClaudeClient(

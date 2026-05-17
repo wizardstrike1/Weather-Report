@@ -33,3 +33,13 @@ def test_empty_allowlist_denies_all(tmp_path):
     p = Permissions(tmp_path, [])
     with pytest.raises(PermissionDenied):
         p.check_url("https://anything.com")
+
+
+def test_allow_all_domains_opt_in(tmp_path):
+    # default: deny-all
+    assert Permissions(tmp_path, []).allow_all is False
+    # opt-in: every host passes, allowlist irrelevant
+    p = Permissions(tmp_path, [], allow_all=True)
+    assert p.check_url("https://anything.example/x")
+    assert p.check_url("http://10.9.8.7:1337/pwn")
+    assert p.check_network_target("evil.test:4444")
