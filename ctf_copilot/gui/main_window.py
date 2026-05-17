@@ -219,6 +219,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         cl = QVBoxLayout(central)
         cl.addWidget(self._build_update_banner())
+        cl.addWidget(self._build_notice_banner())
         cl.addLayout(self._control_bar())
         cl.addWidget(self.tabs)
         self.setCentralWidget(central)
@@ -1089,7 +1090,28 @@ class MainWindow(QMainWindow):
     def _status(self, msg: str) -> None:
         self.statusBar().showMessage(msg)
 
+    def _build_notice_banner(self):
+        self.notice_banner = QWidget()
+        self.notice_banner.setStyleSheet(
+            "background:#33415a;color:white;border-radius:4px;"
+        )
+        lay = QHBoxLayout(self.notice_banner)
+        lay.setContentsMargins(10, 6, 10, 6)
+        self.notice_label = QLabel("")
+        self.notice_label.setWordWrap(True)
+        settings_btn = QPushButton("Open Settings")
+        settings_btn.clicked.connect(self._open_settings)
+        dismiss = QPushButton("Dismiss")
+        dismiss.clicked.connect(lambda: self.notice_banner.hide())
+        lay.addWidget(self.notice_label, 1)
+        lay.addWidget(settings_btn)
+        lay.addWidget(dismiss)
+        self.notice_banner.hide()
+        return self.notice_banner
+
     def _first_run_check(self) -> None:
+        """Non-blocking startup notices: shown as a dismissible in-app banner
+        instead of modal dialogs that gate the window from appearing."""
         from ..llm.claude_client import ClaudeClient
 
         backend = ClaudeClient(
@@ -1097,26 +1119,27 @@ class MainWindow(QMainWindow):
             self.config.max_tokens_per_step,
             cli_command=self.config.claude_cli_command,
         ).backend
-        if backend == "api":
-            pass
-        elif backend == "cli":
-            QMessageBox.information(
-                self, "Using the Claude CLI",
-                f"No ANTHROPIC_API_KEY, but the '{self.config.claude_cli_command}'"
-                " CLI was found on PATH — autonomous solving will shell out to "
-                "`claude -p`. Make sure you're logged into the CLI.",
+
+        notes: list[str] = []
+        if backend == "cli":
+            notes.append(
+                f"No ANTHROPIC_API_KEY — using the "
+                f"'{self.config.claude_cli_command}' CLI (`claude -p`); make "
+                f"sure you're logged into it."
             )
-        else:
-            QMessageBox.information(
-                self, "Manual mode",
-                "No ANTHROPIC_API_KEY and no `claude` CLI found. The app runs "
-                "in manual mode: the agent asks you for each step. Set the key "
-                "in your environment / .env, or install the Claude Code CLI, "
-                "to enable autonomous solving.",
+        elif backend == "manual":
+            notes.append(
+                "No ANTHROPIC_API_KEY and no `claude` CLI — manual mode (the "
+                "agent asks you each step). Set a key or install the CLI for "
+                "autonomous solving."
             )
         if not self.config.allowed_domains:
-            QMessageBox.warning(
-                self, "No allowed domains",
-                "No allowed domains configured. Browser navigation and network "
-                "tools are blocked until you add the CTF host in Settings.",
+            notes.append(
+                "No allowed domains — browser navigation and network tools "
+                "are blocked until you add the CTF host in Settings."
             )
+
+        if notes:
+            self.notice_label.setText("⚠  " + "    •  ".join(notes))
+            self.notice_banner.show()
+            self._status("Startup notices — see the banner (dismissable)")
