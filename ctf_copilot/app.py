@@ -16,9 +16,23 @@ from .core.events import EventBus, EventType
 def main() -> int:
     config = AppConfig.load()
 
+    # Under pythonw.exe (the no-console launcher / shortcut) sys.stderr and
+    # sys.stdout are None — adding a None sink would raise and the app would
+    # never start. Always log to a rotating file; add the stderr sink only
+    # when a real console stream exists.
     logger.remove()
-    logger.add(sys.stderr, level="INFO",
-               format="<green>{time:HH:mm:ss}</green> <level>{message}</level>")
+    try:
+        from .core.config import APP_DIR
+
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        logger.add(APP_DIR / "ctf-copilot.log", level="INFO",
+                   rotation="2 MB", retention=3, enqueue=True,
+                   format="{time:YYYY-MM-DD HH:mm:ss} {level} {message}")
+    except Exception:
+        pass
+    if sys.stderr is not None:
+        logger.add(sys.stderr, level="INFO",
+                   format="<green>{time:HH:mm:ss}</green> <level>{message}</level>")
 
     bus = EventBus()
     bus.subscribe(EventType.LOG,
