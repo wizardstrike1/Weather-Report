@@ -57,6 +57,22 @@ def test_fit_prompt_uses_prompt_cap_not_completion_size():
     assert 512 * 4 < len(out) < len(big)  # bounded by 2k tokens, not 512
 
 
+def test_budget_exhaustion_terminates():
+    b = TokenBudget(session_limit=10_000, per_step_limit=2048)
+    assert not b.exhausted()
+    b.record(7_000, 0)            # 3000 left, < 2048+1000 -> exhausted
+    assert b.exhausted()
+
+
+def test_max_solver_steps_zero_means_unlimited():
+    from ctf_copilot.core.config import AppConfig
+
+    c = AppConfig()
+    assert c.max_solver_steps == 0  # default: token budget governs
+    AppConfig(max_solver_steps=0)   # 0 accepted (ge=0)
+    AppConfig(max_solver_steps=50)  # positive cap still allowed
+
+
 def test_budget_accounting():
     b = TokenBudget(session_limit=1000, per_step_limit=200)
     assert b.can_spend(500)
