@@ -10,6 +10,7 @@ rich>=13.7
 # Optional analysis extras (recommended)
 scapy>=2.5
 pillow>=10.0
+numpy>=1.24    # spectrogram / LSB-audio / tone-envelope (audio CTFs)
 
 # CTF solving extras — used by agent-authored file.write+python scripts
 # (pwntools tubes/ROP, z3 & sympy constraint solving). angr/sage are heavy

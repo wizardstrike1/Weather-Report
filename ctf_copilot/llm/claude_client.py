@@ -90,6 +90,54 @@ class ClaudeClient:
             backend="manual",
         )
 
+    def vision(self, image_path: str, prompt: str,
+               budget: TokenBudget) -> str:
+        """Send ONE image to Claude and return its textual reading.
+
+        API backend only — Claude has no audio modality and the CLI/manual
+        backends have no image input, so they return a clear note. The image
+        is Pillow-downscaled to <=1024px JPEG to bound tokens; gated upstream
+        by the send_screenshots toggle.
+        """
+        if self.backend != "api" or self._client is None:
+            return ("vision unavailable on this backend (need an "
+                    "ANTHROPIC_API_KEY / API mode). Use OCR/zbarimg/strings "
+                    "or describe via other tools instead.")
+        try:
+            import base64
+            import io
+
+            from PIL import Image
+
+            im = Image.open(image_path)
+            im.thumbnail((1024, 1024))
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=80)
+            b64 = base64.standard_b64encode(buf.getvalue()).decode()
+            resp = self._client.messages.create(
+                model=self.model,
+                max_tokens=600,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {
+                        "type": "base64", "media_type": "image/jpeg",
+                        "data": b64}},
+                    {"type": "text", "text": prompt},
+                ]}],
+            )
+            text = "".join(
+                b.text for b in resp.content
+                if getattr(b, "type", "") == "text"
+            )
+            usage = getattr(resp, "usage", None)
+            budget.record(getattr(usage, "input_tokens", 1200),
+                          getattr(usage, "output_tokens",
+                                  estimate_tokens(text)))
+            return text.strip() or "(model returned no text)"
+        except Exception as e:  # noqa: BLE001
+            return f"vision error: {e}"
+
     # ---- backends --------------------------------------------------------
     def _complete_api(self, user_message: str, budget: TokenBudget) -> LLMCallResult:
         resp = self._client.messages.create(  # type: ignore[union-attr]

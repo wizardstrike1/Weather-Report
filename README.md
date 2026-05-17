@@ -58,6 +58,13 @@ sandboxed runner, and produces a Markdown/HTML writeup when solved.
   (pwntools), `gdb`, `RsaCtfTool`, `ciphey`/`ares`, `seccomp-tools`, and
   built-in `factordb`/`libc` lookups; agent-authored scripts can use
   `pwntools`/`z3`/`sympy`.
+- **Audio/Video analysis:** built-in (numpy, no ffmpeg needed) `spectrogram`
+  (flags are often *drawn* in spectra), `lsb_wav`, `tones` (DTMF/Morse via
+  multimon-ng or an amplitude-envelope fallback), `media` summary; with
+  ffmpeg: `frames`/`qr` for video; `transcribe` (Whisper) behind Maximum
+  tools. **`vision.look`** sends a generated spectrogram/frame image to
+  Claude to actually *read* a hidden flag/QR (Claude has no audio modality;
+  this is the comprehension path) — gated by the send-screenshots toggle.
 - **Prompt-injection guardrail:** attacker-controlled text (web pages, tool
   output, file contents, socket data) is wrapped `<untrusted>…</untrusted>`
   with injected role/system markers defanged.

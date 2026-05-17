@@ -423,6 +423,8 @@ class Solver:
                 return True, self._do_browser(a)
             if a.type == "file.write":
                 return True, self._do_file_write(a)
+            if a.type == "vision.look":
+                return True, self._do_vision(a)
             if a.type in ("web.search", "web.fetch"):
                 return True, self._do_research(a)
             if a.type == "file.inspect" or a.type == "file.extract":
@@ -592,6 +594,33 @@ class Solver:
                          summary=res.summary())
         return payload
 
+    def _do_vision(self, a) -> dict:
+        """Let the model 'see' an image (extracted spectrogram / video frame
+        / screenshot) — the only path to comprehend media, since Claude has
+        no audio modality. Gated by the send_screenshots token toggle."""
+        f = a.args.get("file") or a.args.get("path")
+        if not f:
+            raise PermissionDenied("vision.look requires a 'file' arg")
+        if not self.config.send_screenshots:
+            return {"vision": "vision.look is disabled. Enable 'Allow "
+                    "sending screenshots to Claude' in Settings (it sends "
+                    "the image to the model and costs tokens)."}
+        p = self.perms.resolve_in_workspace(f, must_exist=True)
+        prompt = a.args.get(
+            "prompt",
+            "This image may hide a CTF flag (e.g. text drawn in an audio "
+            "spectrogram, a QR/barcode, or on-screen text in a video "
+            "frame). Transcribe ALL readable text exactly, decode any "
+            "QR/barcode, and report any flag verbatim. Be concise.",
+        )
+        out = self.llm.vision(str(p), prompt, self.budget)
+        self.project.state.add_tool_output("vision", str(p.name), out[:2000], "")
+        self.project.state.add_action("vision.look", p.name, success=True)
+        self._scan_text_for_flags(out, f"vision:{p.name}")
+        self.bus.publish(EventType.TOOL_RESULT, tool="vision.look",
+                         summary=out[:2000])
+        return {"vision": self._untrusted(out)}
+
     def _do_research(self, a) -> dict:
         if not self.config.allow_internet_research:
             raise PermissionDenied(
@@ -657,6 +686,36 @@ class Solver:
             syms = {k: v for k, v in a.args.items()
                     if k not in ("name", "type")}
             return pwn_tools.libc_lookup(syms)
+
+        media_fns = {"media", "spectrogram", "lsb_wav", "tones",
+                     "frames", "qr", "transcribe"}
+        if a.name in media_fns:
+            from ..tools import media
+
+            f = a.args.get("file") or a.args.get("path")
+            if not f:
+                return f"{a.name}: requires a 'file' arg (workspace path)"
+            p = self.perms.resolve_in_workspace(f, must_exist=True)
+            ad = self.project.artifacts_dir
+            if a.name == "qr":
+                return media.qr_decode(p)
+            if a.name == "spectrogram":
+                return media.spectrogram(p, ad)
+            if a.name == "lsb_wav":
+                return media.lsb_wav(p, ad)
+            if a.name == "tones":
+                return media.tones(p, ad)
+            if a.name == "frames":
+                return media.video_frames(p, ad,
+                                          int(a.args.get("n", "12") or 12))
+            if a.name == "transcribe":
+                return media.transcribe(p, ad, self.config.max_tools_mode)
+            # "media" = auto-route by type
+            ft = file_analyzer.identify(p.read_bytes()[:64])
+            if "RIFF" in ft or p.suffix.lower() in (".wav", ".mp3", ".ogg",
+                                                    ".flac", ".m4a", ".au"):
+                return media.audio_summary(p, ad)
+            return media.video_frames(p, ad)
         return None
 
     def _do_tool(self, a) -> dict:
