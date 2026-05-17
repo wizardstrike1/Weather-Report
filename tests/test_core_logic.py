@@ -79,7 +79,7 @@ def test_build_user_message_is_compact_json():
     # exactly one newline (the short preamble); JSON itself has no indentation
     assert msg.count("\n") == 1
     payload = _j.loads(msg.split("\n", 1)[1])
-    assert payload["available_tools"] == ["file.inspect", "tool.run"]
+    assert payload["available_tools"] == "file.inspect,tool.run"  # comma str
     assert ", " not in msg and ": " not in msg  # minified separators
 
 

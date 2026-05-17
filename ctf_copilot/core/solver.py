@@ -35,8 +35,6 @@ from ..tools.registry import ToolRegistry
 from ..tools.runner import ToolRunner
 from ..writeup import generator
 
-NOISY_APPROVAL_MSG = "This action is noisy/active and needs your approval."
-
 
 @dataclass
 class SolverControls:

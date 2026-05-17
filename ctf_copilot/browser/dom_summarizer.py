@@ -9,12 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 
-def compact_observation(obs: dict[str, Any], max_text: int = 800) -> dict[str, Any]:
+def compact_observation(obs: dict[str, Any], max_text: int = 600) -> dict[str, Any]:
     out = dict(obs)
     if "visible_text" in out:
         t = out["visible_text"]
         out["visible_text"] = t[:max_text] + ("…" if len(t) > max_text else "")
-    for key in ("links", "buttons", "inputs"):
+    for key in ("links", "buttons", "inputs", "forms"):
         if isinstance(out.get(key), list):
-            out[key] = out[key][:25]
+            out[key] = out[key][:15]
     return out
