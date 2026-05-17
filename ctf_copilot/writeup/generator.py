@@ -60,7 +60,7 @@ def generate(project: Project) -> dict[str, Path]:
         url=project.url or "n/a",
         status=st.get_meta("status", "unsolved"),
         summary=st.get_meta("writeup_summary",
-                            "Solved with CTF Copilot." if project.solved
+                            "Solved with Weather Report." if project.solved
                             else "Investigation in progress."),
         enumeration=_bullets([r["summary"] for r in st.recent_actions(30)][::-1]),
         insight=st.get_meta("writeup_insight", "_See notes/hypotheses below._"),

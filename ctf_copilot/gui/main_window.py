@@ -162,7 +162,14 @@ class MainWindow(QMainWindow):
         self.solver: Solver | None = None
         self.worker: SolverWorker | None = None
 
-        self.setWindowTitle("CTF Copilot")
+        from .. import APP_NAME, icon_path
+
+        self._app_name = APP_NAME
+        self.setWindowTitle(APP_NAME)
+        if (ip := icon_path()):
+            from PySide6.QtGui import QIcon
+
+            self.setWindowIcon(QIcon(ip))
         self.resize(1280, 860)
 
         # --- sidebar dock (tree grouped by CTF competition) ---
@@ -294,7 +301,8 @@ class MainWindow(QMainWindow):
         a_about.triggered.connect(
             lambda: QMessageBox.information(
                 self, "Authorized use only",
-                "CTF Copilot is for challenges you are authorized to attempt. "
+                "Weather Report is for challenges you are authorized to "
+                "attempt. "
                 "Network actions are restricted to the allowed-domains list. "
                 "See SECURITY.md.",
             )
@@ -615,7 +623,7 @@ class MainWindow(QMainWindow):
                 pass
             self.project = None
             self.solver = None
-            self.setWindowTitle("CTF Copilot")
+            self.setWindowTitle(self._app_name)
 
     def _rename_project(self, path: str) -> None:
         from ..core.project import read_card
@@ -861,7 +869,7 @@ class MainWindow(QMainWindow):
         self.challenge.category.setText(proj.category)
         self.challenge.url.setText(proj.url)
         self.challenge.flag_format.setText(proj.flag_format)
-        self.setWindowTitle(f"CTF Copilot — {proj.name}")
+        self.setWindowTitle(f"{self._app_name} — {proj.name}")
         self.challenge.context.setPlainText(proj.state.get_meta("user_context"))
         self._repopulate_panels()
         self._status(f"Loaded project: {proj.name}")

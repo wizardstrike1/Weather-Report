@@ -1,4 +1,6 @@
-# CTF Copilot
+# Weather Report
+
+*(Python package / launch module remains `ctf_copilot`.)*
 
 A local desktop assistant for solving **authorized** Capture-the-Flag
 challenges. It drives a real Chromium browser via Playwright, reasons with
