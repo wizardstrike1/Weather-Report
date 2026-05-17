@@ -1,5 +1,9 @@
 # Weather Report
 
+<p align="center">
+  <img src="ctf_copilot/assets/app.png" alt="Weather Report" width="320">
+</p>
+
 *(Python package / launch module remains `ctf_copilot`.)*
 
 A local desktop assistant for solving **authorized** Capture-the-Flag
