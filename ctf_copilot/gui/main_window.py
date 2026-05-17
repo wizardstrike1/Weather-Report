@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import shutil
+import sys
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, QTimer, QProcess, Signal
 from PySide6.QtGui import QAction, QKeySequence, QPalette, QColor
 from PySide6.QtWidgets import (
     QApplication,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from ..core.config import AppConfig
 from ..core.events import Event, EventBus, EventType
+from ..core import updater
 from ..core.project import STATUS_LABELS, Project, read_status
 from ..core.solver import Solver
 from ..tools import file_analyzer
@@ -54,6 +56,15 @@ def apply_dark(app: QApplication) -> None:
     pal.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
     pal.setColor(QPalette.ColorRole.Highlight, QColor(38, 110, 183))
     app.setPalette(pal)
+
+
+class UpdateChecker(QThread):
+    """Runs the git fetch/compare off the UI thread."""
+
+    done = Signal(object)  # updater.UpdateStatus
+
+    def run(self) -> None:
+        self.done.emit(updater.check_for_update())
 
 
 class MainWindow(QMainWindow):
@@ -111,6 +122,7 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         cl = QVBoxLayout(central)
+        cl.addWidget(self._build_update_banner())
         cl.addLayout(self._control_bar())
         cl.addWidget(self.tabs)
         self.setCentralWidget(central)
@@ -121,6 +133,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._wire_events()
         self._first_run_check()
+        self._init_update_checker()
 
     # ---- UI scaffolding --------------------------------------------------
     def _control_bar(self) -> QHBoxLayout:
@@ -189,7 +202,101 @@ class MainWindow(QMainWindow):
                 "See SECURITY.md.",
             )
         )
-        h.addAction(a_about)
+        a_upd = QAction("Check for updates now", self)
+        a_upd.triggered.connect(lambda: self._run_update_check(manual=True))
+        h.addActions([a_about, a_upd])
+
+    # ---- self-update -----------------------------------------------------
+    def _build_update_banner(self):
+        self.update_banner = QWidget()
+        self.update_banner.setStyleSheet(
+            "background:#8a6d00;color:white;border-radius:4px;"
+        )
+        lay = QHBoxLayout(self.update_banner)
+        lay.setContentsMargins(10, 6, 10, 6)
+        self.update_label = QLabel("Update available.")
+        self.update_btn = QPushButton("Update && Restart now")
+        self.update_btn.clicked.connect(self._apply_update)
+        later = QPushButton("Later")
+        later.clicked.connect(lambda: self.update_banner.hide())
+        lay.addWidget(self.update_label)
+        lay.addStretch()
+        lay.addWidget(self.update_btn)
+        lay.addWidget(later)
+        self.update_banner.hide()
+        self._pending_update = None
+        return self.update_banner
+
+    def _init_update_checker(self) -> None:
+        self._update_thread: UpdateChecker | None = None
+        if not updater.is_git_checkout():
+            return  # zip / frozen build: silently unsupported
+        QTimer.singleShot(3000, self._run_update_check)  # shortly after start
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._run_update_check)
+        self._update_timer.start(30 * 60 * 1000)  # every 30 min
+
+    def _run_update_check(self, manual: bool = False) -> None:
+        if self._update_thread and self._update_thread.isRunning():
+            return
+        self._manual_check = manual
+        self._update_thread = UpdateChecker()
+        self._update_thread.done.connect(self._on_update_status)
+        self._update_thread.start()
+
+    def _on_update_status(self, st) -> None:
+        self._update_branch = getattr(st, "branch", "main")
+        if st.available:
+            n = st.behind
+            self.update_label.setText(
+                f"⬆ Update available: {n} new commit(s) on '{st.branch}'. "
+                "Pressing Update pauses & stops everything, pulls, and restarts."
+            )
+            self.update_banner.show()
+            self._status(f"Update available ({n} commit(s))")
+        elif getattr(self, "_manual_check", False):
+            msg = ("You're up to date."
+                   if st.supported and not st.error
+                   else f"Update check unavailable: {st.error or 'not a git checkout'}")
+            QMessageBox.information(self, "Updates", msg)
+
+    def _apply_update(self) -> None:
+        self.update_btn.setEnabled(False)
+        self._status("Pausing everything before update…")
+        # 1) stop the solver loop + browser, let the worker unwind
+        if self.solver:
+            self.solver.controls.paused = True
+            self.solver.controls.stop = True
+        if self.worker and self.worker.isRunning():
+            self.worker.wait(8000)
+        if self.solver:
+            try:
+                self.solver.shutdown()
+            except Exception:
+                pass
+        # 2) persist state and close the project cleanly
+        try:
+            self._persist_challenge_inputs()
+            if self.project:
+                self.project.close()
+        except Exception:
+            pass
+        # 3) pull
+        self._status("Applying update (git pull)…")
+        ok, msg = updater.apply_update(getattr(self, "_update_branch", "main"))
+        if not ok:
+            QMessageBox.warning(self, "Update failed", msg)
+            self.update_btn.setEnabled(True)
+            return
+        # 4) relaunch the same interpreter (pythonw stays windowless)
+        QMessageBox.information(
+            self, "Updating",
+            "Update applied — the app will now restart.\n\n" + msg[:500],
+        )
+        QProcess.startDetached(
+            sys.executable, ["-m", "ctf_copilot.app"], str(updater.REPO_ROOT)
+        )
+        QApplication.quit()
 
     # ---- project lifecycle ----------------------------------------------
     def _refresh_projects(self) -> None:
