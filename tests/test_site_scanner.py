@@ -38,6 +38,32 @@ def test_extract_from_links_and_dedupe():
     assert web.url == "https://x.ctf/challenges/web-100"
 
 
+def test_scan_html_offline():
+    html = """
+    <html><head><title>OpenCTF 2025 - Challenges</title></head><body>
+      <a href="/challenges/web-1">Cookie Monster</a>
+      <a href="https://o.ctf/task/42">RSA Warmup</a>
+      <a href="/about">About</a>
+      <a href="/challenges/web-1">Cookie Monster</a>
+    </body></html>
+    """
+    comp, hits = s.scan_html(html, "https://o.ctf/")
+    assert comp == "OpenCTF 2025"
+    names = sorted(h.name for h in hits)
+    assert names == ["Cookie Monster", "RSA Warmup"]
+    cm = next(h for h in hits if h.name == "Cookie Monster")
+    assert cm.url == "https://o.ctf/challenges/web-1"
+    rsa = next(h for h in hits if h.name == "RSA Warmup")
+    assert rsa.category == "crypto"
+
+
+def test_scan_html_no_base_keeps_raw_href():
+    html = '<a href="/challenges/c1">Pwnable</a>'
+    _, hits = s.scan_html(html, "")
+    assert hits[0].url == "/challenges/c1"
+    assert hits[0].category == "pwn"
+
+
 def test_competition_name():
     assert s.competition_name("PicoCTF 2025 - Challenges", "http://x") == \
         "PicoCTF 2025"

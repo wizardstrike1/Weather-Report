@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 CATEGORY_KEYWORDS = {
-    "web": ["web", "http", "xss", "sqli", "ssrf"],
+    "web": ["web", "xss", "sqli", "ssrf", "http header", "cookie"],
     "pwn": ["pwn", "binary exploitation", "exploit", "overflow", "rop",
             "ret2", "shellcode", "libc", "gadget", "format string", "heap"],
     "crypto": ["crypto", "rsa", "aes", "cipher", "hash", "ecc"],
@@ -30,6 +30,11 @@ CATEGORY_KEYWORDS = {
 _CHALLENGE_HREF = re.compile(
     r"/(challenge|challenges|task|tasks|chal|problem)s?(/|#|\?|$)", re.I
 )
+_ANCHOR_RE = re.compile(
+    r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.S | re.I
+)
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
+_TAGS_RE = re.compile(r"<[^>]+>")
 
 
 @dataclass(frozen=True)
@@ -68,7 +73,7 @@ def extract_from_links(
     links: list[dict], page_text: str, base_url: str
 ) -> list[ChallengeHit]:
     """Heuristic fallback: anchors that look like challenges."""
-    origin = _origin(base_url)
+    origin = _origin(base_url) if base_url else ""
     hits: list[ChallengeHit] = []
     for ln in links:
         href = (ln.get("href") or "").strip()
@@ -77,8 +82,13 @@ def extract_from_links(
             continue
         if not _CHALLENGE_HREF.search(href):
             continue
-        url = href if href.startswith("http") else urljoin(origin + "/", href)
-        hits.append(ChallengeHit(text, classify_category(text, href), url))
+        if href.startswith("http"):
+            url = href
+        elif origin:
+            url = urljoin(origin + "/", href)
+        else:  # offline HTML with no base — keep the raw href
+            url = href
+        hits.append(ChallengeHit(text, classify_category(text), url))
     return hits
 
 
@@ -91,6 +101,24 @@ def dedupe(hits: list[ChallengeHit]) -> list[ChallengeHit]:
             seen.add(key)
             out.append(h)
     return out
+
+
+def anchors_from_html(html: str) -> list[dict]:
+    """Pull (text, href) pairs out of raw saved HTML (no browser)."""
+    out: list[dict] = []
+    for href, inner in _ANCHOR_RE.findall(html):
+        text = re.sub(r"\s+", " ", _TAGS_RE.sub("", inner)).strip()
+        out.append({"text": text, "href": href.strip()})
+    return out
+
+
+def scan_html(html: str, base_url: str = "") -> tuple[str, list[ChallengeHit]]:
+    """Mode 3: parse a saved challenge-listing HTML file (offline)."""
+    hits = extract_from_links(anchors_from_html(html), html, base_url or "")
+    m = _TITLE_RE.search(html)
+    title = re.sub(r"\s+", " ", _TAGS_RE.sub("", m.group(1))).strip() if m \
+        else ""
+    return competition_name(title, base_url or "imported.html"), dedupe(hits)
 
 
 def _origin(url: str) -> str:
