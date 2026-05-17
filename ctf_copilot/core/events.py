@@ -24,6 +24,7 @@ class EventType(str, Enum):
     FLAG_CANDIDATE = "flag_candidate"
     NOTE = "note"
     SOLVER_STATE = "solver_state"
+    TOKENS = "tokens"
     ERROR = "error"
 
 

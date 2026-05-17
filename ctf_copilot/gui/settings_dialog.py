@@ -39,6 +39,14 @@ class SettingsDialog(QDialog):
         self.sandbox.setChecked(config.sandbox_mode)
         self.afk = QCheckBox("AFK mode (auto-resolve all prompts)")
         self.afk.setChecked(config.afk_mode)
+        self.research = QCheckBox(
+            "Allow internet research (read-only web.search / web.fetch)"
+        )
+        self.research.setChecked(config.allow_internet_research)
+        self.learning = QCheckBox(
+            "Enable cross-challenge learning (knowledge base)"
+        )
+        self.learning.setChecked(config.enable_learning)
         self.auto_submit = QCheckBox("Auto-submit flags (dangerous)")
         self.auto_submit.setChecked(config.auto_submit_flags)
         self.send_shots = QCheckBox("Allow sending screenshots to Claude")
@@ -65,6 +73,8 @@ class SettingsDialog(QDialog):
         form.addRow(self.headless)
         form.addRow(self.sandbox)
         form.addRow(self.afk)
+        form.addRow(self.research)
+        form.addRow(self.learning)
         form.addRow(self.auto_submit)
         form.addRow(self.send_shots)
 
@@ -92,6 +102,8 @@ class SettingsDialog(QDialog):
         c.headless = self.headless.isChecked()
         c.sandbox_mode = self.sandbox.isChecked()
         c.afk_mode = self.afk.isChecked()
+        c.allow_internet_research = self.research.isChecked()
+        c.enable_learning = self.learning.isChecked()
         c.auto_submit_flags = self.auto_submit.isChecked()
         c.send_screenshots = self.send_shots.isChecked()
         c.save()

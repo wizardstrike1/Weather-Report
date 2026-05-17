@@ -23,6 +23,22 @@ registered for, a lab you own, or a target the organizer has put in scope).
   explicit user approval in the UI. Auto-submit is off by default.
 - **Rate limiting & timeouts** on the tool runner.
 
+## Internet research (opt-in)
+
+`web.search` / `web.fetch` are **disabled by default** and must be enabled in
+Settings. They are GET-only, size/time-capped, never send cookies or
+credentials, and refuse `localhost`, `*.local`, and any host resolving to a
+private / loopback / link-local / reserved IP (so they cannot be turned into
+an SSRF against internal services or cloud metadata). Use them for *technique*
+lookups, not for exfiltrating challenge data.
+
+## Cross-challenge learning
+
+Solved challenges are distilled into a local shared knowledge base
+(`~/.ctf-copilot/knowledge.sqlite`). It stores your own challenge titles,
+context, and action summaries — keep it local; it is not uploaded anywhere.
+Disable via Settings if undesired.
+
 ## Data handling
 
 - The Anthropic API key is read only from the environment / `.env`. It is

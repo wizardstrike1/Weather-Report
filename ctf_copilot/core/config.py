@@ -19,6 +19,7 @@ load_dotenv()
 APP_DIR = Path(os.environ.get("CTF_COPILOT_HOME", Path.home() / ".ctf-copilot"))
 CONFIG_PATH = APP_DIR / "config.json"
 DEFAULT_PROJECTS_DIR = APP_DIR / "projects"
+KNOWLEDGE_DB = APP_DIR / "knowledge.sqlite"  # shared by all projects/instances
 
 DEFAULT_FLAG_REGEXES = [
     r"flag\{[^}]{1,256}\}",
@@ -54,6 +55,14 @@ class AppConfig(BaseModel):
     # answer "proceed autonomously") so a run completes with zero interaction.
     afk_mode: bool = Field(default=False)
 
+    # Opt-in read-only internet research (web.search / web.fetch). Separate
+    # from the target allow-list; refuses localhost/private hosts.
+    allow_internet_research: bool = Field(default=False)
+    research_max_bytes: int = Field(default=300_000, ge=10_000, le=5_000_000)
+
+    # Cross-challenge learning (lessons distilled from solved challenges).
+    enable_learning: bool = Field(default=True)
+
     auto_submit_flags: bool = Field(default=False)
     send_screenshots: bool = Field(default=False)
     max_solver_steps: int = Field(default=25, ge=1, le=500)
@@ -87,5 +96,8 @@ class AppConfig(BaseModel):
         return cfg
 
     def save(self) -> None:
+        # Atomic write so concurrent instances never read a half-written file.
         APP_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(self.model_dump_json(indent=2), "utf-8")
+        tmp = CONFIG_PATH.with_suffix(f".json.tmp.{os.getpid()}")
+        tmp.write_text(self.model_dump_json(indent=2), "utf-8")
+        os.replace(tmp, CONFIG_PATH)

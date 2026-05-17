@@ -17,8 +17,11 @@ class StateStore:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10)
         self._conn.row_factory = sqlite3.Row
+        # WAL + busy_timeout: tolerate several app instances running at once.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(MIGRATIONS.read_text("utf-8"))
         self._conn.commit()
 
