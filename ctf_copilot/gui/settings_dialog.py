@@ -30,6 +30,13 @@ class SettingsDialog(QDialog):
         self.summarize_n = QSpinBox()
         self.summarize_n.setRange(2, 100)
         self.summarize_n.setValue(config.summarize_after_n_messages)
+        self.max_steps = QSpinBox()
+        self.max_steps.setRange(0, 100_000)
+        self.max_steps.setValue(config.max_solver_steps)
+        self.max_steps.setToolTip(
+            "0 = no step cap (token budget + Stop govern the run). "
+            "A positive value adds a hard step ceiling."
+        )
         self.allowed = QLineEdit(", ".join(config.allowed_domains))
         self.allow_all = QCheckBox(
             "Allow ALL domains (CTF-only — disables target-scope safety)"
@@ -75,6 +82,7 @@ class SettingsDialog(QDialog):
         form.addRow("Model", self.model)
         form.addRow("Max tokens / step", self.max_tokens)
         form.addRow("Summarize after N", self.summarize_n)
+        form.addRow("Max solver steps (0 = unlimited)", self.max_steps)
         form.addRow("Allowed domains (comma-sep)", self.allowed)
         form.addRow(self.allow_all)
         form.addRow("Flag regexes ( | -sep)", self.flag_re)
@@ -102,6 +110,7 @@ class SettingsDialog(QDialog):
         c.model = self.model.text().strip()
         c.max_tokens_per_step = self.max_tokens.value()
         c.summarize_after_n_messages = self.summarize_n.value()
+        c.max_solver_steps = self.max_steps.value()
         c.allowed_domains = [
             d.strip() for d in self.allowed.text().split(",") if d.strip()
         ]

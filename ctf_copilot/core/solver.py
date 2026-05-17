@@ -82,6 +82,7 @@ class Solver:
         self._flag_re = self._compile_flags()
         self._pending_answer: str | None = None
         self._pending_approval: bool | None = None
+        self._afk_blocked = 0  # consecutive AFK auto-resolved info-asks
         self._ev = threading.Event()
         self._nudge = ""          # corrective hint appended after a bad reply
         self._parse_fails = 0     # consecutive unparseable LLM replies
@@ -229,6 +230,11 @@ class Solver:
             if approval:
                 self._pending_approval = True
             else:
+                # A free-text ask in AFK means the agent believes it's
+                # blocked on something only a human can give. Count these;
+                # if it keeps happening there is no autonomous path and
+                # spinning to max_steps just burns the token budget.
+                self._afk_blocked += 1
                 self._pending_answer = (
                     "AFK MODE: no user is available. Do NOT ask the user "
                     "anything. Proceed fully autonomously using your tools "
@@ -266,6 +272,18 @@ class Solver:
         for step in steps:
             if self.controls.stop:
                 self.bus.publish(EventType.SOLVER_STATE, state="stopped")
+                return
+            # AFK + genuinely-unobtainable input: the agent kept asking the
+            # user (auto-resolved) with no progress. There is no autonomous
+            # path — stop and report instead of spinning the budget away.
+            if self.controls.afk and self._afk_blocked >= 3:
+                self.bus.log(
+                    "[AFK] stopping: agent needs user-only input it cannot "
+                    "obtain autonomously (see open questions)."
+                )
+                self._set_status(STATUS_INPUT_NEEDED)
+                self.bus.publish(EventType.SOLVER_STATE,
+                                 state="blocked_needs_user")
                 return
             # The token budget is now a REAL terminator (previously it only
             # truncated prompts) — this is what makes a step cap optional.
@@ -520,8 +538,19 @@ class Solver:
             obs = sess.submit(a.args.get("selector", "form"))
         elif t == "screenshot":
             path = sess.screenshot(a.args.get("name", "shot"))
-            self.bus.publish(EventType.BROWSER_ACTION, action="screenshot", path=path)
-            return {}
+            try:
+                rel = str(__import__("pathlib").Path(path).relative_to(
+                    self.project.root))
+            except ValueError:
+                rel = path
+            self.bus.publish(EventType.BROWSER_ACTION,
+                             action="screenshot", path=path)
+            self.project.state.add_action("browser.screenshot", rel,
+                                          success=True)
+            # Return the REAL path so the agent can vision.look it (it used
+            # to get {} and guess a wrong path -> infinite "inspect" loop).
+            return {"screenshot": rel,
+                    "hint": f'vision.look {{"file":"{rel}"}} to read the page'}
         elif t == "download":
             obs = sess.open_url(self.perms.check_url(a.args["url"]))
             d = sess.take_pending_download()
@@ -876,6 +905,7 @@ class Solver:
 
     # ---- flag scanning ---------------------------------------------------
     def _add_flag(self, value: str, source: str, conf: float) -> None:
+        self._afk_blocked = 0  # real progress — reset the blocked counter
         self.project.state.add_flag_candidate(value, source, conf)
         self.bus.publish(EventType.FLAG_CANDIDATE, value=value,
                          source=source, confidence=conf)
