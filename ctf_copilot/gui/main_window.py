@@ -177,6 +177,9 @@ class MainWindow(QMainWindow):
         sw = QWidget()
         sl = QVBoxLayout(sw)
         sl.addWidget(QLabel("Projects (grouped by competition)"))
+        legend = QLabel("▶ working   ⏸ paused   ■ idle/stopped")
+        legend.setStyleSheet("color:#9aa0a6;")
+        sl.addWidget(legend)
         sl.addWidget(self.sidebar)
         new_btn = QPushButton("New challenge")
         new_btn.clicked.connect(lambda: self._new_project())
@@ -450,10 +453,12 @@ class MainWindow(QMainWindow):
             for proj_root, c in members:
                 cat = c["category"] or "uncat"
                 lbl = STATUS_LABELS.get(c["status"], c["status"])
-                leaf = QTreeWidgetItem([f"[{cat}] {c['name']}   —   [{lbl}]"])
+                base = f"[{cat}] {c['name']}   —   [{lbl}]"
+                leaf = QTreeWidgetItem([f"{self._runtime_glyph(str(proj_root))}"
+                                        f" {base}"])
                 leaf.setData(0, Qt.ItemDataRole.UserRole,
                              {"type": "proj", "path": str(proj_root),
-                              "name": c["name"]})
+                              "name": c["name"], "base": base})
                 leaf.setFlags(leaf.flags() & ~Qt.ItemFlag.ItemIsDropEnabled)
                 top.addChild(leaf)
                 if str(proj_root) == sel_path:
@@ -461,6 +466,28 @@ class MainWindow(QMainWindow):
         self.sidebar.expandAll()
         if restore:
             self.sidebar.setCurrentItem(restore)
+
+    # ---- live runtime indicators (▶ working / ⏸ paused / ■ idle) --------
+    def _runtime_glyph(self, path: str) -> str:
+        running = bool(self.worker and self.worker.isRunning())
+        if (self.project and str(self.project.root) == path and running):
+            paused = bool(self.solver and self.solver.controls.paused)
+            return "⏸" if paused else "▶"
+        return "■"
+
+    def _update_runtime_markers(self) -> None:
+        """Cheap in-place relabel of leaves (no filesystem reglob / no
+        selection churn) so the symbols track start/pause/stop instantly."""
+        for i in range(self.sidebar.topLevelItemCount()):
+            grp = self.sidebar.topLevelItem(i)
+            for j in range(grp.childCount()):
+                leaf = grp.child(j)
+                d = leaf.data(0, Qt.ItemDataRole.UserRole) or {}
+                if d.get("type") != "proj" or "base" not in d:
+                    continue
+                leaf.setText(
+                    0, f"{self._runtime_glyph(d['path'])} {d['base']}"
+                )
 
     def _new_project(self, default_comp: str = "") -> None:
         name, ok = QInputDialog.getText(self, "New challenge", "Challenge name:")
@@ -912,8 +939,13 @@ class MainWindow(QMainWindow):
         self.solver.controls.paused = False
         self.solver.controls.afk = self.afk_chk.isChecked()
         self.worker = SolverWorker(self.solver, auto=auto)
-        self.worker.finished_run.connect(lambda: self._status("Solver run finished"))
+        self.worker.finished_run.connect(self._on_worker_finished)
         self.worker.start()
+        self._update_runtime_markers()
+
+    def _on_worker_finished(self) -> None:
+        self._status("Solver run finished")
+        self._update_runtime_markers()
 
     def _toggle_pause(self) -> None:
         if self.solver:
@@ -921,12 +953,14 @@ class MainWindow(QMainWindow):
             self.pause_btn.setText(
                 "Resume" if self.solver.controls.paused else "Pause"
             )
+            self._update_runtime_markers()
 
     def _stop(self) -> None:
         if self.solver:
             self.solver.controls.stop = True
             self.solver.shutdown()
             self._status("Stopped")
+            self._update_runtime_markers()
 
     def _add_hint(self) -> None:
         if not self.project:
@@ -1044,9 +1078,12 @@ class MainWindow(QMainWindow):
             )
             if state == "solved":
                 self._status(f"SOLVED — flag {p.get('flag','')}")
-            # persisted-status transitions should update the sidebar badge
+            # persisted-status transitions rebuild the tree (badge text);
+            # everything else just refreshes the live ▶/⏸/■ markers.
             if state in STATUS_LABELS:
                 self._refresh_projects()
+            else:
+                self._update_runtime_markers()
 
     # ---- first run -------------------------------------------------------
     def _status(self, msg: str) -> None:
