@@ -322,6 +322,11 @@ class MainWindow(QMainWindow):
 
     def _init_update_checker(self) -> None:
         self._update_thread: UpdateChecker | None = None
+        self._update_behind = 0
+        # The commit this process booted from. If the on-disk checkout moves
+        # past it (e.g. changes authored in this same clone), the running
+        # code is stale even though `git` says we're not "behind" the remote.
+        self._boot_commit = updater.head_commit()
         if not updater.is_git_checkout():
             return  # zip / frozen build: silently unsupported
         QTimer.singleShot(3000, self._run_update_check)  # shortly after start
@@ -339,18 +344,37 @@ class MainWindow(QMainWindow):
 
     def _on_update_status(self, st) -> None:
         self._update_branch = getattr(st, "branch", "main")
+        self._update_behind = st.behind
+        head = getattr(st, "head", "")
+        stale = bool(
+            head and self._boot_commit and head != self._boot_commit
+        )
         if st.available:
-            n = st.behind
             self.update_label.setText(
-                f"⬆ Update available: {n} new commit(s) on '{st.branch}'. "
-                "Pressing Update pauses & stops everything, pulls, and restarts."
+                f"⬆ Update available: {st.behind} new commit(s) on "
+                f"'{st.branch}'. Pressing Update pauses & stops everything, "
+                "pulls, and restarts."
             )
             self.update_banner.show()
-            self._status(f"Update available ({n} commit(s))")
+            self._status(f"Update available ({st.behind} commit(s))")
+        elif stale:
+            # disk is current (nothing to pull) but THIS process is running
+            # code from an older commit — only a restart is needed.
+            self.update_label.setText(
+                f"♻ The app code on disk changed since launch "
+                f"({self._boot_commit} → {head}). Restart to run the new "
+                "version (no download needed)."
+            )
+            self.update_btn.setText("Restart now")
+            self.update_banner.show()
+            self._status("Restart needed to apply on-disk changes")
         elif getattr(self, "_manual_check", False):
-            msg = ("You're up to date."
-                   if st.supported and not st.error
-                   else f"Update check unavailable: {st.error or 'not a git checkout'}")
+            if not (st.supported and not st.error):
+                msg = (f"Update check unavailable: "
+                       f"{st.error or 'not a git checkout'}")
+            else:
+                msg = (f"You're up to date and running the latest code "
+                       f"(commit {head or '?'}).")
             QMessageBox.information(self, "Updates", msg)
 
     def _apply_update(self) -> None:
@@ -374,17 +398,22 @@ class MainWindow(QMainWindow):
                 self.project.close()
         except Exception:
             pass
-        # 3) pull
-        self._status("Applying update (git pull)…")
-        ok, msg = updater.apply_update(getattr(self, "_update_branch", "main"))
-        if not ok:
-            QMessageBox.warning(self, "Update failed", msg)
-            self.update_btn.setEnabled(True)
-            return
+        # 3) pull only if the remote is actually ahead; otherwise the disk
+        #    is already current and we just need a fresh process.
+        msg = "Code already current on disk; restarting to apply it."
+        if getattr(self, "_update_behind", 0) > 0:
+            self._status("Applying update (git pull)…")
+            ok, msg = updater.apply_update(
+                getattr(self, "_update_branch", "main")
+            )
+            if not ok:
+                QMessageBox.warning(self, "Update failed", msg)
+                self.update_btn.setEnabled(True)
+                return
         # 4) relaunch the same interpreter (pythonw stays windowless)
         QMessageBox.information(
-            self, "Updating",
-            "Update applied — the app will now restart.\n\n" + msg[:500],
+            self, "Restarting",
+            "The app will now restart.\n\n" + msg[:500],
         )
         QProcess.startDetached(
             sys.executable, ["-m", "ctf_copilot.app"], str(updater.REPO_ROOT)
