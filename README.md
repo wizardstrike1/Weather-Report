@@ -39,6 +39,11 @@ sandboxed runner, and produces a Markdown/HTML writeup when solved.
 - **Token usage tracker** in the toolbar (session / budget / project total).
 - **Multi-instance safe:** per-project browser profiles, WAL-mode SQLite,
   atomic config writes — run several instances/projects at once.
+- **Self-update:** checks the git remote on startup and every 30 min; when
+  the checkout is behind, an "Update & Restart" banner appears. Pressing it
+  pauses/stops the solver + browser, saves state, `git pull --ff-only`s, and
+  relaunches. Also under Help → "Check for updates now". Hidden if not a git
+  checkout.
 - **Manual mode** when no API key is set — the agent asks you each step.
 
 ## Setup
