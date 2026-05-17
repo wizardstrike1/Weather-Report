@@ -1063,10 +1063,18 @@ class MainWindow(QMainWindow):
                 p.get("hypothesis", ""), p.get("thought", ""), p.get("action", {})
             )
         elif ev.type == EventType.ASK_USER:
-            self.chat.ask(p.get("question", ""), approval=p.get("approval", False))
-            self.tabs.setCurrentWidget(self.chat)
-            self.activateWindow()
-            self.raise_()
+            if p.get("afk_auto"):
+                # AFK already auto-resolved this — show it for the record
+                # only; do NOT arm inputs / steal focus / switch tabs.
+                self.chat.system(
+                    f"[AFK auto-resolved] {p.get('question', '')}"
+                )
+            else:
+                self.chat.ask(p.get("question", ""),
+                              approval=p.get("approval", False))
+                self.tabs.setCurrentWidget(self.chat)
+                self.activateWindow()
+                self.raise_()
         elif ev.type == EventType.FLAG_CANDIDATE:
             self.challenge.add_flag(
                 p.get("value", ""), p.get("source", ""), p.get("confidence", 0.0)
