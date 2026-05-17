@@ -112,6 +112,53 @@ class PlaywrightSession:
         page.screenshot(path=str(out), full_page=False)
         return str(out)
 
+    def try_login(self, url: str, username: str, password: str) -> dict[str, Any]:
+        """Best-effort heuristic form login (CTFd and most simple platforms).
+
+        Opens ``url``; if no password field, also tries ``<origin>/login``.
+        Fills the first password input and the most likely username/email
+        field, then submits its form.
+        """
+        page = self._ensure()
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        pw = page.query_selector("input[type=password]")
+        if pw is None:
+            from urllib.parse import urlparse
+
+            u = urlparse(url)
+            page.goto(f"{u.scheme}://{u.netloc}/login",
+                      wait_until="domcontentloaded", timeout=30000)
+            pw = page.query_selector("input[type=password]")
+        if pw is not None:
+            user_el = None
+            for sel in (
+                "input[name=name]",            # CTFd
+                "input[name=username]",
+                "input[name=email]",
+                "input[name=login]",
+                "input[type=email]",
+                "input[type=text]:not([type=hidden])",
+            ):
+                user_el = page.query_selector(sel)
+                if user_el:
+                    break
+            if user_el:
+                user_el.fill(username)
+            pw.fill(password)
+            try:
+                pw.evaluate(
+                    "el => { const f = el.form; if (f) f.requestSubmit "
+                    "? f.requestSubmit() : f.submit(); }"
+                )
+            except Exception:
+                btn = page.query_selector(
+                    "button[type=submit], input[type=submit], button"
+                )
+                if btn:
+                    btn.click()
+            page.wait_for_load_state("domcontentloaded")
+        return self.observe()
+
     def fetch_json(self, url: str) -> Any | None:
         """Same-origin fetch from within the page (inherits session cookies).
         Used by the site scanner to read e.g. CTFd's /api/v1/challenges."""

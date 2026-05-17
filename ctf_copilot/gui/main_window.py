@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QFileDialog,
     QInputDialog,
+    QLineEdit,
     QLabel,
     QTreeWidget,
     QTreeWidgetItem,
@@ -74,11 +75,14 @@ class ScanWorker(QThread):
     done = Signal(str, object)  # competition, list[ChallengeHit]
     failed = Signal(str)
 
-    def __init__(self, url: str, profile_dir: Path, headless: bool) -> None:
+    def __init__(self, url: str, profile_dir: Path, headless: bool,
+                 username: str = "", password: str = "") -> None:
         super().__init__()
         self._url = url
         self._profile = profile_dir
         self._headless = headless
+        self._user = username
+        self._pw = password
 
     def run(self) -> None:
         from ..browser.playwright_session import PlaywrightSession
@@ -93,6 +97,8 @@ class ScanWorker(QThread):
                 headless=self._headless,
             )
             sess.start()
+            if self._user or self._pw:
+                sess.try_login(self._url, self._user, self._pw)
             comp, hits = site_scanner.scan(sess, self._url)
             self.done.emit(comp, hits)
         except Exception as e:  # noqa: BLE001 - report any failure to the UI
@@ -411,17 +417,63 @@ class MainWindow(QMainWindow):
         self._load_project(Project.open(Path(path)))
 
     # ---- import an entire site -----------------------------------------
+    _IMPORT_MODES = [
+        "Single URL (page is public, or auto-logs-in via a key in the URL)",
+        "URL + username/password (scanner logs in first)",
+        "Upload a saved HTML file of the challenge list (offline)",
+    ]
+
     def _import_site(self) -> None:
+        mode, ok = QInputDialog.getItem(
+            self, "Import site", "How do you want to import?",
+            self._IMPORT_MODES, 0, False,
+        )
+        if not ok:
+            return
+        idx = self._IMPORT_MODES.index(mode)
+
+        if idx == 2:  # ---- upload saved HTML ----
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select saved challenge-listing HTML",
+                filter="HTML (*.html *.htm);;All files (*)",
+            )
+            if not path:
+                return
+            base, _ = QInputDialog.getText(
+                self, "Import site",
+                "Original site URL (optional — lets relative links resolve "
+                "and gives each challenge a working URL):",
+            )
+            from ..core import site_scanner
+
+            try:
+                html = Path(path).read_text("utf-8", "replace")
+            except OSError as e:
+                QMessageBox.warning(self, "Import site", f"Cannot read file: {e}")
+                return
+            comp, hits = site_scanner.scan_html(html, (base or "").strip())
+            self._on_scan_done(comp, hits)
+            return
+
+        # ---- URL modes ----
         url, ok = QInputDialog.getText(
-            self, "Import site",
-            "CTF site URL (CTFd / challenge listing). Log in first if it "
-            "needs auth — a browser profile persists across scans:",
+            self, "Import site", "CTF site / challenge-listing URL:"
         )
         url = (url or "").strip()
         if not ok or not url:
             return
         if "://" not in url:
             url = "http://" + url
+        user = pw = ""
+        if idx == 1:
+            user, ok = QInputDialog.getText(self, "Import site", "Username:")
+            if not ok:
+                return
+            pw, ok = QInputDialog.getText(
+                self, "Import site", "Password:", QLineEdit.EchoMode.Password
+            )
+            if not ok:
+                return
 
         # respect the allowed-domain allowlist; offer to add the host
         try:
@@ -445,7 +497,7 @@ class MainWindow(QMainWindow):
             return
         self._status(f"Scanning {url} for challenges…")
         self._scan_thread = ScanWorker(
-            url, APP_DIR / "import-profile", self.config.headless
+            url, APP_DIR / "import-profile", self.config.headless, user, pw
         )
         self._scan_thread.done.connect(self._on_scan_done)
         self._scan_thread.failed.connect(
