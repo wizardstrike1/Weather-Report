@@ -22,18 +22,31 @@ _MAX_SAMPLES = 60 * 44100  # cap analysis to ~60 s of audio
 
 def _read_wav(path: Path):
     """Return (mono_int16_list_as_bytes-free, framerate, nchan) or raise."""
+    import numpy as np
+
     with wave.open(str(path), "rb") as w:
         nch, sw, fr, nfr = (w.getnchannels(), w.getsampwidth(),
                             w.getframerate(), w.getnframes())
         raw = w.readframes(min(nfr, _MAX_SAMPLES))
-    if sw != 2:  # normalise to 16-bit signed for analysis
-        import audioop
-        raw = audioop.lin2lin(raw, sw, 2)
-    import numpy as np
-
-    a = np.frombuffer(raw, dtype="<i2")
+    # Normalise any sample width to int16 with numpy (no `audioop`, which is
+    # removed in Python 3.13).
+    if sw == 2:
+        a = np.frombuffer(raw, dtype="<i2").astype(np.int16)
+    elif sw == 1:  # 8-bit WAV is unsigned
+        a = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128) * 256
+    elif sw == 4:
+        a = (np.frombuffer(raw, dtype="<i4") >> 16).astype(np.int16)
+    elif sw == 3:  # packed 24-bit little-endian
+        b = np.frombuffer(raw, dtype=np.uint8)
+        b = b[: (len(b) // 3) * 3].reshape(-1, 3).astype(np.int32)
+        v = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
+        v[v >= 1 << 23] -= 1 << 24
+        a = (v >> 8).astype(np.int16)
+    else:
+        raise ValueError(f"unsupported sample width {sw}")
     if nch > 1:
-        a = a.reshape(-1, nch).mean(axis=1).astype("int16")
+        a = a[: (len(a) // nch) * nch].reshape(-1, nch).mean(
+            axis=1).astype(np.int16)
     return a, fr, nch, sw
 
 

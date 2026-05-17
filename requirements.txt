@@ -12,13 +12,15 @@ scapy>=2.5
 pillow>=10.0
 numpy>=1.24    # spectrogram / LSB-audio / tone-envelope (audio CTFs)
 
-# CTF solving extras — used by agent-authored file.write+python scripts
-# (pwntools tubes/ROP, z3 & sympy constraint solving). angr/sage are heavy
-# and intentionally NOT auto-installed; enable "Maximum tools" + install them
-# yourself (pipx install angr; apt install sagemath).
-pwntools>=4.11
+# CTF solving extras — used by agent-authored file.write+python scripts.
+# z3/sympy ship clean Windows wheels so they're safe to auto-install.
 z3-solver>=4.12
 sympy>=1.12
+# pwntools / angr / sage are intentionally NOT listed: pwntools' build is
+# fragile on Windows and would break `pip install -r requirements.txt`.
+# Install them yourself where you actually run pwn/rev (Linux/WSL):
+#   pipx install pwntools ; pipx install angr ; apt install sagemath
+# The registry/agent degrade gracefully when they're absent.
 
 # Dev / test
 pytest>=8.0
