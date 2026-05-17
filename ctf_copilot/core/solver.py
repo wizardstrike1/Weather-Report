@@ -62,7 +62,9 @@ class Solver:
         bus.log(f"LLM backend: {self.llm.backend}")
         self.memory = ConversationMemory(config.summarize_after_n_messages)
         self.budget = TokenBudget(
-            config.token_budget_per_session, config.max_tokens_per_step
+            config.token_budget_per_session,
+            config.max_tokens_per_step,
+            prompt_token_cap=config.prompt_token_cap,
         )
         try:
             self.kb: KnowledgeBase | None = KnowledgeBase(KNOWLEDGE_DB)
@@ -328,7 +330,15 @@ class Solver:
         lessons = []
         if self.kb and self.config.enable_learning:
             query = f"{self.project.name} {' '.join(snap.get('facts', [])[:5])}"
-            lessons = self.kb.relevant(self.project.category, query, limit=5)
+            # Top 3 only; send title/category + a short solution excerpt
+            # (drop the bulky 'problem' field) — this rides every prompt.
+            for L in self.kb.relevant(self.project.category, query, limit=3):
+                sol = str(L.get("solution", ""))
+                lessons.append({
+                    "title": L.get("title", ""),
+                    "category": L.get("category", ""),
+                    "solution": sol[:600] + ("…" if len(sol) > 600 else ""),
+                })
         msg = build_user_message(
             snap, delta, self.memory.digest_text(), avail,
             lessons=lessons,
@@ -524,10 +534,23 @@ class Solver:
             )
             if size <= 65536 and looks_text:
                 content = path.read_text("utf-8", "replace")
-                payload["file_content"] = content[:16000]
-                self.project.state.add_fact(
-                    f"Full content of {path.name} ({size}B):\n{content[:6000]}"
-                )
+                # Return the source ONCE as the step observation (deltas mean
+                # it isn't resent). Do NOT store it as a fact — facts ride
+                # every prompt. Mirror the full text to artifacts/ so the
+                # agent can file.inspect it again if it needs it later.
+                payload["file_content"] = content[:12000]
+                mirror = self.project.artifacts_dir / f"{path.stem}.source.txt"
+                try:
+                    mirror.write_text(content, "utf-8")
+                    rel = mirror.relative_to(self.project.root)
+                    self.project.state.add_fact(
+                        f"Read {path.name} ({size}B); full source saved to "
+                        f"{rel} (file.inspect it to re-read)."
+                    )
+                except OSError:
+                    self.project.state.add_fact(
+                        f"Read full source of {path.name} ({size}B)."
+                    )
         except OSError:
             pass
 
@@ -562,10 +585,10 @@ class Solver:
                 raise PermissionDenied("web.fetch requires a 'url' arg")
             out = web_research.fetch(url, max_bytes=mb)
             label, key = f"fetch: {url}", url
-        self.project.state.add_tool_output("web", label, out[:4000], "")
+        self.project.state.add_tool_output("web", label, out[:2000], "")
         self.project.state.add_action(a.type, label, success=True)
         self.bus.publish(EventType.TOOL_RESULT, tool=a.type, summary=out[:2000])
-        return {"research": out[:4000], "query": key}
+        return {"research": out[:2500], "query": key}
 
     def _do_file_write(self, a) -> dict:
         """Let the agent author its own scripts/payloads inside the workspace

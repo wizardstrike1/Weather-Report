@@ -96,6 +96,17 @@ def test_project_status_lifecycle(tmp_path):
     assert read_status(tmp_path / "nonexistent") == STATUS_INCOMPLETE
 
 
+def test_snapshot_clips_values_and_uses_basenames(tmp_path):
+    proj = Project.create(tmp_path, "clip")
+    proj.state.add_fact("F" * 5000)  # huge fact
+    proj.state.add_download(
+        str(tmp_path / "clip" / "downloads" / "payload.bin"), "", "deadbeef"
+    )
+    snap = proj.state.snapshot()
+    assert len(snap["facts"][0]) <= 401  # 400 + ellipsis
+    assert snap["downloads"] == ["payload.bin"]  # basename only, not full path
+
+
 def test_state_snapshot_is_bounded(tmp_path):
     proj = Project.create(tmp_path, "snap")
     for i in range(50):

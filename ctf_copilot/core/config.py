@@ -36,6 +36,7 @@ class AppConfig(BaseModel):
     max_tokens_per_step: int = Field(default=2048, ge=256, le=16384)
     summarize_after_n_messages: int = Field(default=12, ge=2)
     token_budget_per_session: int = Field(default=400_000, ge=10_000)
+    prompt_token_cap: int = Field(default=12_000, ge=1_000, le=180_000)
 
     projects_dir: str = Field(default=str(DEFAULT_PROJECTS_DIR))
     browser_profile_dir: str = Field(default=str(APP_DIR / "browser-profile"))
