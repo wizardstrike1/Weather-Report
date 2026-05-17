@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..core.permissions import PermissionDenied, Permissions
+from ..core.proc import NO_WINDOW
 from .registry import ToolRegistry, ToolSpec
 from .sandbox import build_command
 
@@ -113,6 +114,7 @@ class ToolRunner:
                 errors="replace",  # tool output is rarely the Windows locale
                 timeout=timeout_s,
                 shell=False,
+                **NO_WINDOW,
             )
             rc = proc.returncode
             stdout, stderr = proc.stdout, proc.stderr
