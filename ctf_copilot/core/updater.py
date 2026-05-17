@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+
+from .proc import NO_WINDOW
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,7 +37,7 @@ def _git(*args: str, timeout: int = 25) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(REPO_ROOT), *args],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=timeout, shell=False,
+        timeout=timeout, shell=False, **NO_WINDOW,
     )
 
 

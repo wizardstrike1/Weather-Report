@@ -17,6 +17,8 @@ import subprocess
 import wave
 from pathlib import Path
 
+from ..core.proc import NO_WINDOW
+
 _MAX_SAMPLES = 60 * 44100  # cap analysis to ~60 s of audio
 
 
@@ -61,7 +63,7 @@ def _ensure_wav(path: Path, out_dir: Path) -> Path | None:
         subprocess.run(
             ["ffmpeg", "-y", "-i", str(path), "-ac", "1", "-ar", "44100",
              str(dst)],
-            capture_output=True, timeout=120, shell=False,
+            capture_output=True, timeout=120, shell=False, **NO_WINDOW,
         )
         return dst if dst.exists() else None
     except (OSError, subprocess.SubprocessError):
@@ -157,13 +159,13 @@ def tones(path: Path, out_dir: Path) -> str:
             subprocess.run(
                 ["ffmpeg", "-y", "-i", str(wav), "-ac", "1", "-ar", "22050",
                  "-f", "s16le", str(raw)],
-                capture_output=True, timeout=120, shell=False,
+                capture_output=True, timeout=120, shell=False, **NO_WINDOW,
             )
             r = subprocess.run(
                 ["multimon-ng", "-a", "DTMF", "-a", "MORSE_CW",
                  "-a", "AFSK1200", "-t", "raw", str(raw)],
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=120, shell=False,
+                errors="replace", timeout=120, shell=False, **NO_WINDOW,
             )
             return "multimon-ng:\n" + (r.stdout or r.stderr)[:3000]
         except (OSError, subprocess.SubprocessError) as e:
@@ -209,7 +211,7 @@ def qr_decode(path: Path) -> str:
             if shutil.which("zbarimg"):
                 r = subprocess.run(["zbarimg", "-q", str(path)],
                                    capture_output=True, text=True,
-                                   timeout=30, shell=False)
+                                   timeout=30, shell=False, **NO_WINDOW)
                 return "zbarimg: " + (r.stdout.strip() or "no codes")
             return ("qr_decode: install pyzbar (pip) or zbar (zbarimg) to "
                     "decode QR/barcodes; otherwise vision.look the image.")
@@ -227,7 +229,7 @@ def video_frames(path: Path, out_dir: Path, n: int = 12) -> str:
             ["ffmpeg", "-y", "-i", str(path), "-vf",
              f"thumbnail,scale=640:-1", "-frames:v", str(n),
              str(fdir / "f%02d.png")],
-            capture_output=True, timeout=180, shell=False,
+            capture_output=True, timeout=180, shell=False, **NO_WINDOW,
         )
         frames = sorted(fdir.glob("*.png"))
         qr = [qr_decode(f) for f in frames]

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+from ..core.proc import NO_WINDOW
 from .prompt_builder import SYSTEM_PROMPT
 from .token_budget import TokenBudget, estimate_tokens
 
@@ -156,7 +157,8 @@ class ClaudeClient:
                 [self._cli_path, "-p", "--output-format", "json",
                  "--allowedTools", "Read"],
                 input=ask, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=120, shell=False,
+                encoding="utf-8", errors="replace", timeout=120,
+                shell=False, **NO_WINDOW,
             )
         except (subprocess.TimeoutExpired, OSError) as e:
             return f"vision (CLI) failed: {e}"
@@ -225,6 +227,7 @@ class ClaudeClient:
                 errors="replace",  # Windows locale (e.g. gbk) would crash decode
                 timeout=90,
                 shell=False,
+                **NO_WINDOW,
             )
         except (subprocess.TimeoutExpired, OSError) as e:
             return LLMCallResult(

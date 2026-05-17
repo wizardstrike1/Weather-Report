@@ -17,6 +17,8 @@ import subprocess
 import threading
 import time
 
+from ..core.proc import NO_WINDOW
+
 MAX_BUFFER = 256 * 1024  # ring cap per session (bytes kept in memory)
 
 
@@ -63,7 +65,7 @@ class InteractiveProc(_Pump):
         self._p = subprocess.Popen(
             argv, cwd=cwd, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            bufsize=0, shell=False,
+            bufsize=0, shell=False, **NO_WINDOW,
         )
         self._t = threading.Thread(target=self._reader, daemon=True)
         self._t.start()
