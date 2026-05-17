@@ -74,7 +74,9 @@ class AppConfig(BaseModel):
 
     auto_submit_flags: bool = Field(default=False)
     send_screenshots: bool = Field(default=False)
-    max_solver_steps: int = Field(default=25, ge=1, le=500)
+    # 0 = no step cap (recommended): the per-session token budget + Stop +
+    # flag-found terminate the run. A positive value adds a hard step ceiling.
+    max_solver_steps: int = Field(default=0, ge=0, le=100_000)
 
     # --- not persisted ---
     @property

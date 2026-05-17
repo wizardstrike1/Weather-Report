@@ -254,11 +254,30 @@ class Solver:
 
     # ---- the loop --------------------------------------------------------
     def run(self, auto: bool, max_steps: int | None = None) -> None:
-        max_steps = max_steps or self.config.max_solver_steps
+        import itertools
+
+        max_steps = (self.config.max_solver_steps if max_steps is None
+                     else max_steps)
+        # max_steps <= 0  => no step cap; the session token budget + Stop +
+        # flag-found govern termination instead.
+        steps = (itertools.count(1) if max_steps <= 0
+                 else range(1, max_steps + 1))
         last_obs: dict = {}
-        for step in range(1, max_steps + 1):
+        for step in steps:
             if self.controls.stop:
                 self.bus.publish(EventType.SOLVER_STATE, state="stopped")
+                return
+            # The token budget is now a REAL terminator (previously it only
+            # truncated prompts) — this is what makes a step cap optional.
+            if self.budget.exhausted():
+                self.project.state.add_note(
+                    f"Session token budget exhausted "
+                    f"(~{self.budget.spent} spent). Raise it in Settings to "
+                    f"continue.", "question",
+                )
+                self.bus.publish(EventType.SOLVER_STATE,
+                                 state="token_budget_exhausted",
+                                 spent=self.budget.spent)
                 return
             while self.controls.paused and not self.controls.stop:
                 self.bus.publish(EventType.SOLVER_STATE, state="paused")

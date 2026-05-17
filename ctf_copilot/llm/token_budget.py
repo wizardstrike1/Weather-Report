@@ -39,6 +39,12 @@ class TokenBudget:
     def can_spend(self, tokens: int) -> bool:
         return self.spent + tokens <= self.session_limit
 
+    def exhausted(self) -> bool:
+        """True when there isn't enough left for another meaningful step
+        (a prompt + a full completion). This is what terminates an
+        unattended run when no step cap is set."""
+        return self.remaining() < (self.per_step_limit + 1000)
+
     def record(self, prompt_tokens: int, completion_tokens: int) -> None:
         self.spent += prompt_tokens + completion_tokens
 
