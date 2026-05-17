@@ -28,7 +28,17 @@ sandboxed runner, and produces a Markdown/HTML writeup when solved.
 - Sandboxed tool runner: registered templates only, no `shell=True`,
   workspace path enforcement, allowed-domain checks, approval gate for noisy
   scans, full logs kept locally, summaries sent to the model.
-- Autonomous solve loop with Step / Auto / Pause / Stop.
+- Autonomous solve loop with Step / Auto / Pause / Stop, plus **AFK mode**
+  (auto-resolves every prompt for fully unattended runs) and self-authored
+  scripts (`file.write` + `tool.run python` with stdin/argv).
+- **Cross-challenge learning:** lessons distilled from solved challenges
+  (especially hard ones) are stored in a shared knowledge base and injected
+  into prompts for future challenges so it improves over time.
+- **Opt-in internet research:** read-only `web.search` / `web.fetch`
+  (SSRF-guarded: refuses localhost/private hosts), off by default.
+- **Token usage tracker** in the toolbar (session / budget / project total).
+- **Multi-instance safe:** per-project browser profiles, WAL-mode SQLite,
+  atomic config writes — run several instances/projects at once.
 - **Manual mode** when no API key is set — the agent asks you each step.
 
 ## Setup

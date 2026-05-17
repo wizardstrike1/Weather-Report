@@ -14,8 +14,9 @@ from dataclasses import dataclass
 
 from ..browser.dom_summarizer import compact_observation
 from ..browser.playwright_session import PlaywrightSession
-from ..core.config import AppConfig
+from ..core.config import KNOWLEDGE_DB, AppConfig
 from ..core.events import EventBus, EventType
+from ..core.knowledge import KnowledgeBase, Lesson
 from ..core.permissions import PermissionDenied, Permissions
 from ..core.project import (
     STATUS_AWAITING,
@@ -29,7 +30,7 @@ from ..llm.conversation_memory import ConversationMemory
 from ..llm.prompt_builder import build_user_message
 from ..llm.token_budget import TokenBudget
 from ..llm.tool_router import LLMResponse, parse_llm_response
-from ..tools import file_analyzer
+from ..tools import file_analyzer, web_research
 from ..tools.registry import ToolRegistry
 from ..tools.runner import ToolRunner
 from ..writeup import generator
@@ -63,6 +64,12 @@ class Solver:
         self.budget = TokenBudget(
             config.token_budget_per_session, config.max_tokens_per_step
         )
+        try:
+            self.kb: KnowledgeBase | None = KnowledgeBase(KNOWLEDGE_DB)
+            bus.log(f"Knowledge base: {self.kb.count()} prior lesson(s)")
+        except Exception as e:  # never block solving on the KB
+            self.kb = None
+            bus.log(f"Knowledge base unavailable: {e}", "error")
         self.session: PlaywrightSession | None = None
         self.controls = SolverControls(afk=config.afk_mode)
         self._flag_re = self._compile_flags()
@@ -81,8 +88,11 @@ class Solver:
     # ---- session ---------------------------------------------------------
     def ensure_browser(self) -> PlaywrightSession:
         if self.session is None:
+            # Per-project profile dir: Chromium locks its user-data-dir, so a
+            # shared profile would make multiple instances/projects collide.
+            profile = self.project.root / "browser-profile"
             self.session = PlaywrightSession(
-                profile_dir=__import__("pathlib").Path(self.config.browser_profile_dir),
+                profile_dir=profile,
                 downloads_dir=self.project.downloads_dir,
                 screenshots_dir=self.project.screenshots_dir,
                 headless=self.config.headless,
@@ -95,6 +105,9 @@ class Solver:
         if self.session:
             self.session.stop()
             self.session = None
+        if self.kb:
+            self.kb.close()
+            self.kb = None
 
     # ---- user interaction bridges ---------------------------------------
     def provide_answer(self, text: str) -> None:
@@ -115,6 +128,62 @@ class Solver:
         """Persist the project status and let the GUI refresh its sidebar."""
         self.project.set_status(status)
         self.bus.publish(EventType.SOLVER_STATE, state=status)
+
+    def _publish_tokens(self, ptok: int, ctok: int) -> None:
+        try:
+            total = int(self.project.state.get_meta("tokens_spent", "0") or 0)
+        except ValueError:
+            total = 0
+        total += ptok + ctok
+        self.project.state.set_meta("tokens_spent", str(total))
+        self.bus.publish(
+            EventType.TOKENS,
+            step=ptok + ctok,
+            session=self.budget.spent,
+            session_limit=self.budget.session_limit,
+            project_total=total,
+            backend=self.llm.backend,
+        )
+
+    def _record_lesson(self, flag: str) -> None:
+        """Distil what was learned (especially struggles) into the shared
+        knowledge base so future challenges benefit."""
+        if not (self.kb and self.config.enable_learning):
+            return
+        try:
+            st = self.project.state
+            acts = list(reversed(st.recent_actions(limit=120)))
+            worked = [
+                f"{a['kind']}: {a['summary']}" for a in acts if a["success"]
+            ]
+            pitfalls = [
+                f"{a['kind']}: {a['summary']}"
+                for a in acts if not a["success"]
+            ]
+            facts = st.facts()[-10:]
+            hyps = [n["content"] for n in st.notes("hypothesis")]
+            struggled = " (solved after working through earlier failures)" if \
+                pitfalls else ""
+            solution = (
+                "WHAT WORKED:\n- " + "\n- ".join(worked[-15:] or ["(n/a)"])
+                + "\n\nPITFALLS / DEAD-ENDS TO AVOID:\n- "
+                + "\n- ".join(pitfalls[-12:] or ["(none)"])
+                + (f"\n\nFLAG FORMAT: {flag.split('{')[0]}{{...}}" if flag else "")
+            )
+            self.kb.add_lesson(Lesson(
+                category=self.project.category or "unknown",
+                title=f"{self.project.name}{struggled}",
+                problem=(self.project.state.get_meta("user_context")
+                         or " | ".join(facts))[:1500],
+                solution=solution[:4000],
+                tags=" ".join(
+                    {a["kind"] for a in acts}
+                    | {self.project.category.lower()}
+                ),
+            ))
+            self.bus.log("Recorded a lesson to the knowledge base")
+        except Exception as e:  # learning must never break a solved run
+            self.bus.log(f"Could not record lesson: {e}", "error")
 
     def _ask(
         self,
@@ -256,10 +325,19 @@ class Solver:
         snap = self.project.state.snapshot()
         delta = self.memory.observation_delta(last_obs) if last_obs else {}
         avail = [t["name"] for t in self.registry.availability() if t["available"]]
-        msg = build_user_message(snap, delta, self.memory.digest_text(), avail)
+        lessons = []
+        if self.kb and self.config.enable_learning:
+            query = f"{self.project.name} {' '.join(snap.get('facts', [])[:5])}"
+            lessons = self.kb.relevant(self.project.category, query, limit=5)
+        msg = build_user_message(
+            snap, delta, self.memory.digest_text(), avail,
+            lessons=lessons,
+            internet_research=self.config.allow_internet_research,
+        )
         if self._nudge:
             msg += "\n\nIMPORTANT: " + self._nudge
         result = self.llm.complete(msg, self.budget)
+        self._publish_tokens(result.prompt_tokens, result.completion_tokens)
         if not result.manual_mode:
             self.bus.log(
                 f"LLM step: {result.prompt_tokens}+{result.completion_tokens} tok "
@@ -311,6 +389,8 @@ class Solver:
                 return True, self._do_browser(a)
             if a.type == "file.write":
                 return True, self._do_file_write(a)
+            if a.type in ("web.search", "web.fetch"):
+                return True, self._do_research(a)
             if a.type == "file.inspect" or a.type == "file.extract":
                 return True, self._do_file(a)
             if a.type == "tool.run":
@@ -334,6 +414,7 @@ class Solver:
                 if self._pending_approval:
                     self._pending_approval = None
                     self.project.set_solved(True)
+                    self._record_lesson(flag="")
                     generator.generate(self.project)
                     self.bus.publish(EventType.SOLVER_STATE, state="solved")
                     return False, {}
@@ -462,6 +543,30 @@ class Solver:
                          summary=res.summary())
         return payload
 
+    def _do_research(self, a) -> dict:
+        if not self.config.allow_internet_research:
+            raise PermissionDenied(
+                "Internet research is disabled. Enable it in Settings "
+                "('allow internet research') or solve from first principles."
+            )
+        mb = self.config.research_max_bytes
+        if a.type == "web.search":
+            q = a.args.get("query") or a.args.get("q") or a.name
+            if not q:
+                raise PermissionDenied("web.search requires a 'query' arg")
+            out = web_research.search(q, max_bytes=mb)
+            label, key = f"search: {q}", q
+        else:
+            url = a.args.get("url") or a.name
+            if not url:
+                raise PermissionDenied("web.fetch requires a 'url' arg")
+            out = web_research.fetch(url, max_bytes=mb)
+            label, key = f"fetch: {url}", url
+        self.project.state.add_tool_output("web", label, out[:4000], "")
+        self.project.state.add_action(a.type, label, success=True)
+        self.bus.publish(EventType.TOOL_RESULT, tool=a.type, summary=out[:2000])
+        return {"research": out[:4000], "query": key}
+
     def _do_file_write(self, a) -> dict:
         """Let the agent author its own scripts/payloads inside the workspace
         (then run them via tool.run python). Path is sandbox-confined; bare
@@ -539,6 +644,7 @@ class Solver:
         if accepted:
             self.project.state.mark_flag_submitted(value)
             self.project.set_solved(True)
+            self._record_lesson(flag=value)
             generator.generate(self.project)
             self.bus.publish(EventType.SOLVER_STATE, state="solved", flag=value)
             return False

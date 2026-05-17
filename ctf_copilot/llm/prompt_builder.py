@@ -40,8 +40,17 @@ You MUST reply with a single JSON object, no prose, of the form:
 
 Allowed action types: browser.open_url, browser.click, browser.fill,
 browser.submit, browser.download, browser.upload, browser.screenshot,
-file.inspect, file.extract, file.write, tool.run, notes.add, ask_user,
-flag.submit_candidate, writeup.update, done.
+file.inspect, file.extract, file.write, web.search, web.fetch, tool.run,
+notes.add, ask_user, flag.submit_candidate, writeup.update, done.
+
+LEARNING & RESEARCH:
+- "lessons_from_past" in the input holds distilled lessons from previously
+  solved challenges (especially ones that were hard). Apply them; they tell
+  you what worked and what pitfalls to avoid.
+- If internet research is enabled you may use web.search {"query":"..."}
+  and web.fetch {"url":"https://..."} to look up algorithms, CVEs, or
+  writeups for *techniques* (never to exfiltrate challenge data). If a search
+  action is rejected, research is disabled — solve from first principles.
 
 AUTONOMY — you can DO things yourself; never offload work to the user:
 - NEVER tell the user to run a script/command or to paste output. You run it.
@@ -66,12 +75,16 @@ def build_user_message(
     observation_delta: dict,
     memory_digest: str,
     available_tools: list[str],
+    lessons: list[dict] | None = None,
+    internet_research: bool = False,
 ) -> str:
     payload = {
         "state": state_snapshot,
         "new_observation": observation_delta,
         "history": memory_digest,
         "available_tools": available_tools,
+        "internet_research_enabled": internet_research,
+        "lessons_from_past": lessons or [],
     }
     return (
         "Current challenge state and the newest observation since your last "

@@ -22,6 +22,8 @@ ActionType = Literal[
     "file.inspect",
     "file.extract",
     "file.write",
+    "web.search",
+    "web.fetch",
     "tool.run",
     "notes.add",
     "ask_user",

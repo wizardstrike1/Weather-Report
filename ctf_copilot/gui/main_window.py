@@ -140,6 +140,12 @@ class MainWindow(QMainWindow):
             bar.addWidget(b)
         bar.addWidget(QLabel("State:"))
         bar.addWidget(self.solve_state)
+        self.token_lbl = QLabel("Tokens: 0")
+        self.token_lbl.setToolTip(
+            "LLM tokens — this solver session / per-session budget; "
+            "and this project's lifetime total."
+        )
+        bar.addWidget(self.token_lbl)
         bar.addStretch()
         self.afk_chk = QCheckBox("AFK mode (no prompts — auto-resolve)")
         self.afk_chk.setToolTip(
@@ -258,6 +264,9 @@ class MainWindow(QMainWindow):
         self.challenge.notes.clear()
         self.challenge.flags.clear()
         self.tools.output.clear()
+        self.token_lbl.setText(
+            f"Tokens: proj total {st.get_meta('tokens_spent', '0')}"
+        )
 
         for r in st.downloads():
             self.browser.add_download(r["path"], r["sha256"] or "")
@@ -433,6 +442,12 @@ class MainWindow(QMainWindow):
             )
         elif ev.type == EventType.NOTE:
             self.challenge.add_note(p.get("content", ""), p.get("kind", "note"))
+        elif ev.type == EventType.TOKENS:
+            self.token_lbl.setText(
+                f"Tokens: {p.get('session', 0):,}/"
+                f"{p.get('session_limit', 0):,}  "
+                f"(proj {p.get('project_total', 0):,}, {p.get('backend','?')})"
+            )
         elif ev.type == EventType.SOLVER_STATE:
             state = p.get("state", "?")
             self.solve_state.setText(state)
