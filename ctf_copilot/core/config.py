@@ -55,6 +55,11 @@ class AppConfig(BaseModel):
     docker_image: str = Field(default="")
     tool_paths: dict[str, str] = Field(default_factory=dict)
 
+    # "Maximum tools": unlock expensive/optional power tools (angr symbolic
+    # execution, sage) and raise the per-tool timeout/output ceilings. Does
+    # NOT relax the noisy-approval gate or the workspace/domain sandbox.
+    max_tools_mode: bool = Field(default=False)
+
     # AFK mode: when the agent would ask the user, auto-resolve (approve /
     # answer "proceed autonomously") so a run completes with zero interaction.
     afk_mode: bool = Field(default=False)

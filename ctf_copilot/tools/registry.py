@@ -38,6 +38,7 @@ class ToolSpec:
     noisy: bool = False
     requires_target: bool = False
     optional: bool = True
+    expensive: bool = False  # only available when max_tools_mode is ON
 
 
 def _t(*parts: str) -> list[str]:
@@ -156,6 +157,21 @@ SPECS: list[ToolSpec] = [
              "GPU password cracker", {"linux": "apt install hashcat"}),
     ToolSpec("name-that-hash", Category.CRYPTO, "nth", _t("nth", "-t", "{arg}"),
              "Hash identifier", {"linux": "pipx install name-that-hash"}),
+    ToolSpec("RsaCtfTool", Category.CRYPTO, "RsaCtfTool",
+             _t("RsaCtfTool", "{arg}"),
+             "RSA attack toolkit (weak/known-key recovery). Pass args via "
+             "{arg}, e.g. '--publickey key.pub --uncipher cipher.txt'",
+             {"linux": "pipx install RsaCtfTool"}),
+    ToolSpec("ciphey", Category.CRYPTO, "ciphey", _t("ciphey", "-t", "{arg}"),
+             "Auto-decrypt/decode unknown ciphertext",
+             {"linux": "pipx install ciphey"}),
+    ToolSpec("ares", Category.CRYPTO, "ares", _t("ares", "-t", "{arg}"),
+             "Auto-decrypt (ciphey successor)",
+             {"linux": "cargo install project_ares"}),
+    ToolSpec("sage", Category.CRYPTO, "sage", _t("sage", "{file}"),
+             "SageMath script runner (advanced number theory). EXPENSIVE — "
+             "needs Maximum tools mode.",
+             {"linux": "apt install sagemath"}, expensive=True),
 
     # reverse
     ToolSpec("r2", Category.REVERSE, "r2", _t("r2", "-A", "-q", "-c", "{arg}", "{file}"),
@@ -176,8 +192,25 @@ SPECS: list[ToolSpec] = [
              "APK disassembler", {"linux": "apt install apktool"}),
     ToolSpec("upx", Category.REVERSE, "upx", _t("upx", "-d", "{file}"),
              "Executable packer", {"linux": "apt install upx-ucl"}),
+    ToolSpec("gdb", Category.REVERSE, "gdb",
+             _t("gdb", "-q", "-batch", "-ex", "{arg}", "{file}"),
+             "GDB batch command on a binary (one-shot). For INTERACTIVE "
+             "debugging use the session.spawn action instead.",
+             {"linux": "apt install gdb"}),
+    ToolSpec("angr", Category.REVERSE, "angr", _t("angr", "{file}"),
+             "Symbolic execution scaffold. EXPENSIVE — needs Maximum tools "
+             "mode; prefer authoring an angr script via file.write+python.",
+             {"linux": "pipx install angr"}, expensive=True),
 
     # pwn
+    ToolSpec("pwn", Category.PWN, "pwn", _t("pwn", "{arg}"),
+             "pwntools CLI (checksec/cyclic/disasm/shellcraft/elfdiff). For "
+             "exploits, file.write a pwntools script then tool.run python.",
+             {"linux": "pipx install pwntools"}),
+    ToolSpec("seccomp-tools", Category.PWN, "seccomp-tools",
+             _t("seccomp-tools", "dump", "{file}"),
+             "Dump seccomp BPF rules from a binary",
+             {"linux": "gem install seccomp-tools"}),
     ToolSpec("ROPgadget", Category.PWN, "ROPgadget", _t("ROPgadget", "--binary", "{file}"),
              "ROP gadget finder", {"linux": "pipx install ROPgadget"}),
     ToolSpec("ropper", Category.PWN, "ropper", _t("ropper", "-f", "{file}"),
@@ -205,30 +238,46 @@ BY_NAME: dict[str, ToolSpec] = {s.name: s for s in SPECS}
 
 
 class ToolRegistry:
-    def __init__(self, tool_paths: dict[str, str] | None = None) -> None:
+    def __init__(self, tool_paths: dict[str, str] | None = None,
+                 max_tools: bool = False) -> None:
         self._paths = tool_paths or {}
+        # when False, expensive specs are hidden and refused
+        self._max_tools = max_tools
 
     def resolve_binary(self, spec: ToolSpec) -> str | None:
         if spec.name in self._paths:
             return self._paths[spec.name]
         return shutil.which(spec.binary)
 
+    def _gated(self, spec: ToolSpec | None) -> bool:
+        """True if the spec is hidden because it's expensive and the
+        Maximum-tools toggle is off."""
+        return bool(spec and spec.expensive and not self._max_tools)
+
     def is_available(self, name: str) -> bool:
         spec = BY_NAME.get(name)
-        return bool(spec and self.resolve_binary(spec))
+        if spec is None or self._gated(spec):
+            return False
+        return bool(self.resolve_binary(spec))
 
     def get(self, name: str) -> ToolSpec | None:
-        return BY_NAME.get(name)
+        spec = BY_NAME.get(name)
+        return None if self._gated(spec) else spec
 
     def availability(self) -> list[dict[str, object]]:
         out: list[dict[str, object]] = []
         for spec in SPECS:
+            gated = self._gated(spec)
             out.append(
                 {
                     "name": spec.name,
                     "category": spec.category.value,
-                    "available": bool(self.resolve_binary(spec)),
+                    # gated expensive tools report unavailable so the solver
+                    # never offers them; the GUI can still show them locked.
+                    "available": (not gated) and bool(self.resolve_binary(spec)),
                     "noisy": spec.noisy,
+                    "expensive": spec.expensive,
+                    "locked": gated,
                     "description": spec.description,
                     "install": spec.install,
                 }

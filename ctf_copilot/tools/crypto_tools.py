@@ -88,6 +88,38 @@ def identify_hash(s: str) -> list[str]:
     return out or ["unknown"]
 
 
+def factordb_lookup(n: str, timeout: int = 15) -> str:
+    """Query factordb.com for the factorisation of an integer (great for
+    weak-RSA CTF challenges). Read-only HTTP, public host."""
+    import json
+    import urllib.request
+
+    from .web_research import _assert_safe_host
+
+    n = str(n).strip()
+    if not n.lstrip("-").isdigit():
+        return "factordb: 'n' must be an integer"
+    url = "http://factordb.com/api?query=" + n
+    _assert_safe_host(url)
+    req = urllib.request.Request(url, headers={"User-Agent": "ctf-copilot"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+            data = json.loads(r.read(200_000).decode("utf-8", "replace"))
+    except Exception as e:  # noqa: BLE001
+        return f"factordb error: {e}"
+    status = data.get("status", "?")
+    factors = data.get("factors", [])
+    flat = []
+    for f in factors:
+        val = f[0] if isinstance(f, (list, tuple)) else f
+        mult = f[1] if isinstance(f, (list, tuple)) and len(f) > 1 else 1
+        flat.append(f"{val}^{mult}" if str(mult) != "1" else str(val))
+    fully = status == "FF"
+    return (f"factordb status={status} "
+            f"({'fully factored' if fully else 'not fully factored'})\n"
+            f"factors: {' * '.join(flat) if flat else '(none)'}")
+
+
 def caesar_vigenere_hint() -> str:
     return ("Use rot_bruteforce for Caesar. For Vigenère, recover the key with "
             "Kasiski/IC analysis, then repeating_key_xor-style subtraction. "

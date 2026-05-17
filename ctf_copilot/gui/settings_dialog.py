@@ -43,6 +43,10 @@ class SettingsDialog(QDialog):
         self.sandbox.setChecked(config.sandbox_mode)
         self.afk = QCheckBox("AFK mode (auto-resolve all prompts)")
         self.afk.setChecked(config.afk_mode)
+        self.max_tools = QCheckBox(
+            "Maximum tools (unlock angr/sage; longer timeouts)"
+        )
+        self.max_tools.setChecked(config.max_tools_mode)
         self.research = QCheckBox(
             "Allow internet research (read-only web.search / web.fetch)"
         )
@@ -78,6 +82,7 @@ class SettingsDialog(QDialog):
         form.addRow(self.headless)
         form.addRow(self.sandbox)
         form.addRow(self.afk)
+        form.addRow(self.max_tools)
         form.addRow(self.research)
         form.addRow(self.learning)
         form.addRow(self.auto_submit)
@@ -108,6 +113,7 @@ class SettingsDialog(QDialog):
         c.headless = self.headless.isChecked()
         c.sandbox_mode = self.sandbox.isChecked()
         c.afk_mode = self.afk.isChecked()
+        c.max_tools_mode = self.max_tools.isChecked()
         c.allow_internet_research = self.research.isChecked()
         c.enable_learning = self.learning.isChecked()
         c.auto_submit_flags = self.auto_submit.isChecked()

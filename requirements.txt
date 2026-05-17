@@ -11,6 +11,14 @@ rich>=13.7
 scapy>=2.5
 pillow>=10.0
 
+# CTF solving extras — used by agent-authored file.write+python scripts
+# (pwntools tubes/ROP, z3 & sympy constraint solving). angr/sage are heavy
+# and intentionally NOT auto-installed; enable "Maximum tools" + install them
+# yourself (pipx install angr; apt install sagemath).
+pwntools>=4.11
+z3-solver>=4.12
+sympy>=1.12
+
 # Dev / test
 pytest>=8.0
 pytest-asyncio>=0.23

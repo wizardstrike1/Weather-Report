@@ -51,6 +51,19 @@ sandboxed runner, and produces a Markdown/HTML writeup when solved.
   New-challenge). Right-click the tree to start/pause/stop a challenge,
   rename/delete challenges, rename/delete groups, or make a new one; drag a
   challenge onto another group to move it.
+- **Interactive/stateful tools** (research-backed, EnIGMA-style): persistent
+  `session.*` (drive `gdb`/REPLs/local binaries) and `net.*` (raw TCP tubes
+  for remote pwn) that the agent operates across turns — only new output is
+  sent each turn (token-frugal). Plus power tools registered: `pwn`
+  (pwntools), `gdb`, `RsaCtfTool`, `ciphey`/`ares`, `seccomp-tools`, and
+  built-in `factordb`/`libc` lookups; agent-authored scripts can use
+  `pwntools`/`z3`/`sympy`.
+- **Prompt-injection guardrail:** attacker-controlled text (web pages, tool
+  output, file contents, socket data) is wrapped `<untrusted>…</untrusted>`
+  with injected role/system markers defanged.
+- **"Maximum tools" toggle** (Settings, off by default): unlocks expensive
+  extras (`angr` symbolic execution, `sage`) and raises tool timeout/output
+  ceilings. Does **not** relax the noisy-approval gate or the sandbox.
 - **Self-update:** checks the git remote on startup and every 30 min; when
   the checkout is behind, an "Update & Restart" banner appears. Pressing it
   pauses/stops the solver + browser, saves state, `git pull --ff-only`s, and
