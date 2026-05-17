@@ -24,6 +24,7 @@ class UpdateStatus:
     ahead: int = 0
     branch: str = "main"
     error: str = ""
+    head: str = ""  # current local HEAD commit (to detect on-disk changes)
 
     @property
     def available(self) -> bool:
@@ -40,6 +41,16 @@ def _git(*args: str, timeout: int = 25) -> subprocess.CompletedProcess:
 
 def is_git_checkout() -> bool:
     return (REPO_ROOT / ".git").exists() and shutil.which("git") is not None
+
+
+def head_commit() -> str:
+    """Short HEAD hash of the on-disk checkout, or '' if unavailable."""
+    if not is_git_checkout():
+        return ""
+    try:
+        return _git("rev-parse", "--short", "HEAD", timeout=10).stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        return ""
 
 
 def check_for_update() -> UpdateStatus:
@@ -59,9 +70,10 @@ def check_for_update() -> UpdateStatus:
             (_git("rev-list", "--count", f"origin/{br}..HEAD").stdout
              or "0").strip() or 0
         )
-        return UpdateStatus(True, behind=behind, ahead=ahead, branch=br)
+        return UpdateStatus(True, behind=behind, ahead=ahead, branch=br,
+                            head=head_commit())
     except (subprocess.SubprocessError, ValueError, OSError) as e:
-        return UpdateStatus(True, error=str(e)[:200])
+        return UpdateStatus(True, error=str(e)[:200], head=head_commit())
 
 
 def apply_update(branch: str = "main") -> tuple[bool, str]:

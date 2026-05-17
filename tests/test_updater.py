@@ -14,6 +14,15 @@ def test_is_git_checkout_returns_bool():
     assert isinstance(updater.is_git_checkout(), bool)
 
 
+def test_head_commit_is_str_and_status_has_head():
+    assert isinstance(updater.head_commit(), str)
+    assert UpdateStatus().head == ""
+    # a stale process: behind==0 (nothing to pull) but head != boot commit
+    st = UpdateStatus(supported=True, behind=0, head="abc1234")
+    assert st.available is False  # 'available' is still pull-only
+    assert st.head == "abc1234"
+
+
 def test_apply_update_guard_when_not_checkout(monkeypatch):
     monkeypatch.setattr(updater, "is_git_checkout", lambda: False)
     ok, msg = updater.apply_update("main")
