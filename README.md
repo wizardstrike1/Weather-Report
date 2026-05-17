@@ -53,6 +53,20 @@ cp .env.example .env        # then put your ANTHROPIC_API_KEY in .env
 python -m ctf_copilot.app
 ```
 
+### One-click launch (Windows, no terminal)
+
+After the one-time install above, create app shortcuts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\make_shortcut.ps1
+```
+
+This adds **"CTF Copilot"** to your Desktop and Start Menu. Double-click it
+to open the GUI with no console window (it runs `launch.pyw` via
+`pythonw.exe`). You can also double-click `launch.pyw` directly, or `run.cmd`
+for a console fallback. A true standalone `.exe` is available via
+`python packaging/build.py` (PyInstaller).
+
 First run: you'll be prompted about manual mode (no key) and allowed domains.
 Open **Settings** (Ctrl+,) and add the CTF host (e.g. `ctf.example`) before
 browsing.
