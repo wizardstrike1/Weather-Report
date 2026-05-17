@@ -28,15 +28,22 @@ $targets = @(
     [Environment]::GetFolderPath("Desktop"),
     (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs")
 )
+$icon = Join-Path $repo "ctf_copilot\assets\app.ico"
+if (-not (Test-Path $icon)) { $icon = "$pythonw,0" }
+
 foreach ($dir in $targets) {
-    $lnkPath = Join-Path $dir "CTF Copilot.lnk"
+    # remove the old-name shortcut so there aren't duplicates
+    $old = Join-Path $dir "CTF Copilot.lnk"
+    if (Test-Path $old) { Remove-Item $old -Force }
+
+    $lnkPath = Join-Path $dir "Weather Report.lnk"
     $lnk = $ws.CreateShortcut($lnkPath)
     $lnk.TargetPath = $pythonw
     $lnk.Arguments = '"' + $launch + '"'
     $lnk.WorkingDirectory = $repo
-    $lnk.IconLocation = "$pythonw,0"
-    $lnk.Description = "CTF Copilot - autonomous CTF assistant"
+    $lnk.IconLocation = $icon
+    $lnk.Description = "Weather Report - autonomous CTF assistant"
     $lnk.Save()
     Write-Output "Created: $lnkPath"
 }
-Write-Output "Done. Double-click 'CTF Copilot' on your Desktop to launch."
+Write-Output "Done. Double-click 'Weather Report' on your Desktop to launch."

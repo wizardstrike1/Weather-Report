@@ -1,4 +1,4 @@
-"""CTF Copilot entrypoint.
+"""Weather Report entrypoint.
 
 Loads config, builds the event bus, launches the Qt GUI. Designed so the core
 (config/state/tools/llm) is importable headlessly for tests without Qt.
@@ -48,7 +48,27 @@ def main() -> int:
         logger.error(f"GUI unavailable ({e}). Install PySide6: pip install PySide6")
         return 1
 
+    from PySide6.QtGui import QIcon
+
+    from . import APP_NAME, icon_path
+
+    # Windows: distinct AppUserModelID so the taskbar uses our icon, not
+    # python/pythonw's.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "WeatherReport.CTFCopilot"
+            )
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
+    if (ip := icon_path()):
+        app.setWindowIcon(QIcon(ip))
     apply_dark(app)
     win = MainWindow(config, bus)
     win.show()
