@@ -180,7 +180,11 @@ class ClaudeClient:
                 prompt_tokens=0, completion_tokens=0,
                 manual_mode=True, backend="cli",
             )
-        ptok = ptok or estimate_tokens(prompt)
-        ctok = ctok or estimate_tokens(text)
+        # The CLI envelope reports input_tokens EXCLUDING cached prefix
+        # (often ~2), which would make the session budget never trip. Charge
+        # the budget the larger of reported vs. our estimate of what we
+        # actually sent, so the cap reflects real usage.
+        ptok = max(ptok, estimate_tokens(prompt))
+        ctok = max(ctok, estimate_tokens(text))
         budget.record(ptok, ctok)
         return LLMCallResult(text, ptok, ctok, backend="cli")
