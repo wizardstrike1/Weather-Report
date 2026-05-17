@@ -6,6 +6,7 @@ it small and structured on purpose so we send deltas, not transcripts.
 from __future__ import annotations
 
 import sqlite3
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -116,9 +117,17 @@ class StateStore:
 
     # ---- compact snapshot for the LLM ------------------------------------
     def snapshot(self, max_items: int = 8) -> dict[str, Any]:
-        """A small, structured view of state. Intentionally lossy."""
+        """A small, structured view of state. Intentionally lossy.
+
+        Sent to the model EVERY step, so values are length-clipped to keep
+        per-step token cost flat regardless of how big logs/facts grow.
+        """
         def trunc(rows: list[Any], n: int = max_items) -> list[Any]:
             return rows[:n]
+
+        def clip(s: Any, n: int) -> str:
+            s = str(s)
+            return s if len(s) <= n else s[:n] + "…"
 
         return {
             "challenge": {
@@ -128,22 +137,28 @@ class StateStore:
                 "flag_format": self.get_meta("flag_format"),
                 "status": self.get_meta("status", "unsolved"),
             },
-            "facts": trunc(self.facts()),
+            "facts": [clip(f, 400) for f in trunc(self.facts())],
             "tried_actions": [
-                {"kind": r["kind"], "summary": r["summary"], "ok": bool(r["success"])}
+                {"kind": r["kind"], "summary": clip(r["summary"], 180),
+                 "ok": bool(r["success"])}
                 for r in self.recent_actions(max_items)
             ],
-            "downloads": [r["path"] for r in self.downloads()][:max_items],
+            "downloads": [
+                os.path.basename(r["path"]) for r in self.downloads()
+            ][:max_items],
             "tool_outputs": [
-                {"tool": r["tool"], "summary": r["summary"]}
-                for r in trunc(self.tool_outputs(max_items))
+                {"tool": r["tool"], "summary": clip(r["summary"], 400)}
+                for r in trunc(self.tool_outputs(5), 5)
             ],
             "flag_candidates": [
-                {"value": r["value"], "confidence": r["confidence"]}
-                for r in trunc(self.flag_candidates())
+                {"value": clip(r["value"], 120),
+                 "confidence": round(r["confidence"], 2)}
+                for r in trunc(self.flag_candidates(), 6)
             ],
             "open_questions": [
-                r["content"] for r in self.notes("question")
-            ][:max_items],
-            "hypotheses": [r["content"] for r in self.notes("hypothesis")][:max_items],
+                clip(r["content"], 200) for r in self.notes("question")
+            ][:5],
+            "hypotheses": [
+                clip(r["content"], 200) for r in self.notes("hypothesis")
+            ][:5],
         }

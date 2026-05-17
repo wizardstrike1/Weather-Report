@@ -17,7 +17,7 @@ from ..core.permissions import PermissionDenied, Permissions
 from .registry import ToolRegistry, ToolSpec
 from .sandbox import build_command
 
-MAX_SUMMARY_CHARS = 4000
+MAX_SUMMARY_CHARS = 2500  # one-time LLM view; full output is saved to disk
 
 
 @dataclass

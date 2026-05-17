@@ -29,8 +29,9 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
 @dataclass
 class TokenBudget:
     session_limit: int
-    per_step_limit: int
+    per_step_limit: int          # caps the *completion*, not the prompt
     spent: int = 0
+    prompt_token_cap: int = 12000  # hard ceiling on the prompt we send
 
     def remaining(self) -> int:
         return max(0, self.session_limit - self.spent)
@@ -42,5 +43,8 @@ class TokenBudget:
         self.spent += prompt_tokens + completion_tokens
 
     def fit_prompt(self, text: str) -> str:
-        budget = min(self.per_step_limit, self.remaining())
+        # Bound by the dedicated prompt cap (NOT the completion size) and by
+        # whatever session budget is left. Compaction upstream keeps us well
+        # under this so the crude head/tail truncation rarely triggers.
+        budget = min(self.prompt_token_cap, self.remaining())
         return truncate_to_tokens(text, max(256, budget))

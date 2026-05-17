@@ -44,6 +44,19 @@ def test_truncate():
     assert len(out) < len(s) and "elided" in out
 
 
+def test_fit_prompt_uses_prompt_cap_not_completion_size():
+    big = "x" * 80_000  # ~20k tokens
+    # tiny completion size (per_step_limit) must NOT shrink the prompt;
+    # a generous prompt cap (>= 20k tokens) leaves it intact.
+    b = TokenBudget(10_000_000, per_step_limit=512, prompt_token_cap=30_000)
+    assert b.fit_prompt(big) == big
+    # the prompt cap (not per_step_limit) is what truncates
+    b2 = TokenBudget(10_000_000, per_step_limit=512, prompt_token_cap=2_000)
+    out = b2.fit_prompt(big)
+    assert "elided" in out
+    assert 512 * 4 < len(out) < len(big)  # bounded by 2k tokens, not 512
+
+
 def test_budget_accounting():
     b = TokenBudget(session_limit=1000, per_step_limit=200)
     assert b.can_spend(500)
@@ -53,6 +66,23 @@ def test_budget_accounting():
 
 
 # ---- tool router ----
+def test_build_user_message_is_compact_json():
+    import json as _j
+
+    from ctf_copilot.llm.prompt_builder import build_user_message
+
+    msg = build_user_message(
+        {"challenge": {"name": "x"}}, {"unchanged": True}, "hist",
+        ["file.inspect", "tool.run"], lessons=[{"title": "t"}],
+        internet_research=False,
+    )
+    # exactly one newline (the short preamble); JSON itself has no indentation
+    assert msg.count("\n") == 1
+    payload = _j.loads(msg.split("\n", 1)[1])
+    assert payload["available_tools"] == ["file.inspect", "tool.run"]
+    assert ", " not in msg and ": " not in msg  # minified separators
+
+
 def test_parse_valid_action():
     raw = """```json
     {"thought_summary":"x","hypothesis":"y",

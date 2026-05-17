@@ -86,8 +86,9 @@ def build_user_message(
         "internet_research_enabled": internet_research,
         "lessons_from_past": lessons or [],
     }
+    # Compact JSON (no indentation / minimal separators) ~ 25-35% fewer tokens
+    # than indent=2 on this nested structure, with no loss of information.
     return (
-        "Current challenge state and the newest observation since your last "
-        "action are below. Choose the single best next action.\n\n"
-        + json.dumps(payload, indent=2, default=str)
+        "State + newest observation below. Pick the single best next action.\n"
+        + json.dumps(payload, separators=(",", ":"), default=str)
     )
