@@ -178,5 +178,46 @@ class PlaywrightSession:
         except Exception:
             return None
 
+    def storage(self) -> dict[str, Any]:
+        """Full localStorage + sessionStorage + cookies for the current page.
+        Token-auth SPAs (rCTF/CTFd) keep their JWT here — the agent needs it
+        to make authenticated API calls."""
+        return self._ensure().evaluate(
+            """() => ({
+                url: location.href,
+                localStorage: Object.fromEntries(Object.entries(localStorage)),
+                sessionStorage:
+                    Object.fromEntries(Object.entries(sessionStorage)),
+                cookies: document.cookie,
+            })"""
+        )
+
+    def fetch(self, url: str, method: str = "GET",
+              headers: dict | None = None, body: str | None = None,
+              bearer_ls_key: str | None = None) -> dict[str, Any]:
+        """Authenticated same-origin fetch from inside the page (carries
+        cookies; optionally adds Authorization: Bearer <localStorage[key]>,
+        which is how rCTF/CTFd SPAs authenticate). Returns status + text."""
+        page = self._ensure()
+        return page.evaluate(
+            """async ({u, m, h, b, k}) => {
+                const hh = Object.assign({}, h || {});
+                if (k) {
+                    let t = localStorage.getItem(k);
+                    try { const j = JSON.parse(t); t = j.token||j.authToken||j||t; }
+                    catch(e){}
+                    if (t) hh['Authorization'] = 'Bearer ' + t;
+                }
+                try {
+                    const r = await fetch(u, {method:m, headers:hh,
+                        body:(b||undefined), credentials:'include'});
+                    const txt = await r.text();
+                    return {status:r.status, ok:r.ok, body:txt.slice(0,20000)};
+                } catch(e){ return {status:0, ok:false, body:String(e)}; }
+            }""",
+            {"u": url, "m": method, "h": headers or {}, "b": body,
+             "k": bearer_ls_key},
+        )
+
     def observe(self, include_storage_values: bool = False) -> dict[str, Any]:
         return observe(self._ensure(), include_storage_values=include_storage_values)

@@ -36,6 +36,19 @@ def test_expensive_tools_gated_by_toggle():
 
 
 # ---- new action types validate ----
+def test_tool_router_accepts_browser_storage_and_fetch():
+    r = parse_llm_response(
+        '{"action":{"type":"browser.storage","name":"","args":{}}}'
+    )
+    assert r.action.type == "browser.storage"
+    r2 = parse_llm_response(
+        '{"action":{"type":"browser.fetch","name":"","args":'
+        '{"url":"https://ctf.x/api/v1/challs","bearer_ls_key":"rctf-token"}}}'
+    )
+    assert r2.action.type == "browser.fetch"
+    assert r2.action.args["bearer_ls_key"] == "rctf-token"
+
+
 def test_tool_router_accepts_session_and_net():
     for t, args in (
         ("session.spawn", {"id": "s1", "argv": "./vuln"}),

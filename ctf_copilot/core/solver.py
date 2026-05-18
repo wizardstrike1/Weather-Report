@@ -558,6 +558,36 @@ class Solver:
                 self.project.state.add_download(d["path"], d["source_url"], d["sha256"])
                 self.bus.publish(EventType.DOWNLOAD, **d)
                 self._scan_file_for_flags(d["path"])
+        elif t == "storage":
+            st = sess.storage()
+            blob = __import__("json").dumps(st)[:6000]
+            self.project.state.add_action("browser.storage",
+                                          st.get("url", ""), success=True)
+            return {"storage": self._untrusted(blob),
+                    "hint": "use a JWT here as browser.fetch "
+                            "bearer_ls_key to call the auth'd API"}
+        elif t == "fetch":
+            url = self.perms.check_url(a.args["url"])
+            hdrs = a.args.get("headers", "")
+            try:
+                hdrs = __import__("json").loads(hdrs) if hdrs else {}
+            except (ValueError, TypeError):
+                hdrs = {}
+            res = sess.fetch(
+                url, method=a.args.get("method", "GET"), headers=hdrs,
+                body=a.args.get("body") or None,
+                bearer_ls_key=a.args.get("bearer_ls_key") or None,
+            )
+            self.project.state.add_action(
+                a.type, f"fetch {url} -> {res.get('status')}",
+                success=bool(res.get("ok")),
+            )
+            self._scan_text_for_flags(res.get("body", ""), f"fetch:{url}")
+            self.bus.publish(EventType.TOOL_RESULT, tool="browser.fetch",
+                             summary=str(res.get("status"))
+                             + " " + res.get("body", "")[:1000])
+            return {"status": res.get("status"),
+                    "body": self._untrusted(res.get("body", "")[:8000])}
         else:
             raise PermissionDenied(f"unknown browser action {t}")
         obs = compact_observation(obs)
