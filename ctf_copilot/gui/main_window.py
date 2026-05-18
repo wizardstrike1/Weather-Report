@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 from ..core.config import APP_DIR, AppConfig
 from ..core.permissions import PermissionDenied, Permissions
-from ..core.events import Event, EventBus, EventType
+from ..core.events import Event, EventBus, EventType, ScopedBus
 from ..core import updater
 from ..core.project import STATUS_LABELS, Project, read_card, read_status
 from ..core.solver import Solver
@@ -203,9 +203,16 @@ class MainWindow(QMainWindow):
         self.config = config
         self.bus = bus
         self.registry = ToolRegistry(config.tool_paths)
+        # Per-challenge registries (keyed by str(project.root)) so multiple
+        # challenges run simultaneously, each with its own solver, worker and
+        # Agent-tab conversation. self.project/.solver/.worker below resolve
+        # to the *currently viewed* challenge.
+        self._projects: dict[str, Project] = {}
+        self._solvers: dict[str, Solver] = {}
+        self._workers: dict[str, SolverWorker] = {}
+        self._transcripts: dict[str, list[str]] = {}
+        self._pending_ask: dict[str, tuple[str, bool]] = {}
         self.project: Project | None = None
-        self.solver: Solver | None = None
-        self.worker: SolverWorker | None = None
 
         from .. import APP_NAME, icon_path
 
@@ -256,12 +263,8 @@ class MainWindow(QMainWindow):
         self.challenge.add_hint_btn.clicked.connect(self._add_hint)
         self.challenge.reset_requested.connect(self._reset_challenge)
         self.writeup.generate_requested.connect(self._generate_writeup)
-        self.chat.answer_submitted.connect(
-            lambda t: self.solver and self.solver.provide_answer(t)
-        )
-        self.chat.approval_submitted.connect(
-            lambda ok: self.solver and self.solver.provide_approval(ok)
-        )
+        self.chat.answer_submitted.connect(self._on_answer)
+        self.chat.approval_submitted.connect(self._on_approval_reply)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self.challenge, "Challenge")
@@ -461,22 +464,22 @@ class MainWindow(QMainWindow):
     def _apply_update(self) -> None:
         self.update_btn.setEnabled(False)
         self._status("Pausing everything before update…")
-        # 1) stop the solver loop + browser, let the worker unwind
-        if self.solver:
-            self.solver.controls.paused = True
-            self.solver.controls.stop = True
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(8000)
-        if self.solver:
+        # 1) stop EVERY running challenge, let the workers unwind
+        for s in list(self._solvers.values()):
+            s.controls.stop = True
+        for w in list(self._workers.values()):
+            if w.isRunning():
+                w.wait(8000)
+        for s in list(self._solvers.values()):
             try:
-                self.solver.shutdown()
+                s.shutdown()
             except Exception:
                 pass
-        # 2) persist state and close the project cleanly
+        # 2) persist state and close every project cleanly
         try:
             self._persist_challenge_inputs()
-            if self.project:
-                self.project.close()
+            for pr in list(self._projects.values()):
+                pr.close()
         except Exception:
             pass
         # 3) pull only if the remote is actually ahead; otherwise the disk
@@ -547,10 +550,11 @@ class MainWindow(QMainWindow):
 
     # ---- live runtime indicators (▶ working / ⏸ paused / ■ idle) --------
     def _runtime_glyph(self, path: str) -> str:
-        running = bool(self.worker and self.worker.isRunning())
-        if (self.project and str(self.project.root) == path and running):
-            paused = bool(self.solver and self.solver.controls.paused)
-            return "⏸" if paused else "▶"
+        # per-challenge: ANY running challenge shows ▶/⏸, not just the viewed
+        w = self._workers.get(path)
+        if w and w.isRunning():
+            s = self._solvers.get(path)
+            return "⏸" if (s and s.controls.paused) else "▶"
         return "■"
 
     def _update_runtime_markers(self) -> None:
@@ -660,6 +664,41 @@ class MainWindow(QMainWindow):
         }
         return sorted(seen, key=lambda c: (c == "", c.lower()))
 
+    # --- current-challenge accessors over the per-challenge registries ---
+    @property
+    def _cur(self) -> str | None:
+        return str(self.project.root) if self.project else None
+
+    @property
+    def solver(self):
+        k = self._cur
+        return self._solvers.get(k) if k else None
+
+    @solver.setter
+    def solver(self, v) -> None:
+        k = self._cur
+        if not k:
+            return
+        if v is None:
+            self._solvers.pop(k, None)
+        else:
+            self._solvers[k] = v
+
+    @property
+    def worker(self):
+        k = self._cur
+        return self._workers.get(k) if k else None
+
+    @worker.setter
+    def worker(self, v) -> None:
+        k = self._cur
+        if not k:
+            return
+        if v is None:
+            self._workers.pop(k, None)
+        else:
+            self._workers[k] = v
+
     def _open_path(self, path: str) -> None:
         if self.project and str(self.project.root) == path:
             return
@@ -671,28 +710,37 @@ class MainWindow(QMainWindow):
         self._start(auto=True)
 
     def _release_if_affected(self, paths: list[str]) -> None:
-        """If the active project is among ``paths``, stop its solver and close
-        it so the folder can be moved/deleted (Windows file locks)."""
-        if not self.project:
-            return
-        cur = str(self.project.root)
-        if any(cur == p or cur.startswith(p + os.sep) for p in paths):
-            if self.solver:
-                self.solver.controls.stop = True
-            if self.worker and self.worker.isRunning():
-                self.worker.wait(6000)
-            if self.solver:
+        """Stop+close ANY (current or background) challenge whose folder is
+        among ``paths`` so it can be moved/deleted (Windows file locks), and
+        clean its registries."""
+        affected = [
+            k for k in list(self._projects)
+            if any(k == p or k.startswith(p + os.sep) for p in paths)
+        ]
+        for k in affected:
+            s = self._solvers.get(k)
+            w = self._workers.get(k)
+            if s:
+                s.controls.stop = True
+            if w and w.isRunning():
+                w.wait(6000)
+            if s:
                 try:
-                    self.solver.shutdown()
+                    s.shutdown()
                 except Exception:
                     pass
-            try:
-                self.project.close()
-            except Exception:
-                pass
-            self.project = None
-            self.solver = None
-            self.setWindowTitle(self._app_name)
+            pr = self._projects.get(k)
+            if pr:
+                try:
+                    pr.close()
+                except Exception:
+                    pass
+            for d in (self._solvers, self._workers, self._projects,
+                      self._transcripts, self._pending_ask):
+                d.pop(k, None)
+            if self.project and str(self.project.root) == k:
+                self.project = None
+                self.setWindowTitle(self._app_name)
 
     def _rename_project(self, path: str) -> None:
         from ..core.project import read_card
@@ -965,18 +1013,41 @@ class MainWindow(QMainWindow):
         if lw and lw.isRunning():
             lw.finish()
             lw.wait(4000)
-        if self.solver:
-            self.solver.controls.stop = True
-            self.solver.shutdown()
-        if self.project:
-            self.project.close()
+        # stop EVERY running challenge, not just the viewed one
+        for s in list(self._solvers.values()):
+            try:
+                s.controls.stop = True
+            except Exception:
+                pass
+        for w in list(self._workers.values()):
+            if w.isRunning():
+                w.wait(4000)
+        for s in list(self._solvers.values()):
+            try:
+                s.shutdown()
+            except Exception:
+                pass
+        for pr in list(self._projects.values()):
+            try:
+                pr.close()
+            except Exception:
+                pass
         event.accept()
 
     def _load_project(self, proj: Project) -> None:
-        if self.project:
-            self.project.close()
+        # Switch the *view* only — never tear down other challenges; their
+        # solvers may be running. Reuse an already-open instance so we don't
+        # open a second StateStore on the same sqlite.
+        key = str(proj.root)
+        if key in self._projects and self._projects[key] is not proj:
+            try:
+                proj.close()  # discard the redundant freshly-opened handle
+            except Exception:
+                pass
+            proj = self._projects[key]
+        else:
+            self._projects[key] = proj
         self.project = proj
-        self.solver = Solver(proj, self.config, self.bus)
         self.challenge.name.setText(proj.name)
         self.challenge.category.setText(proj.category)
         self.challenge.url.setText(proj.url)
@@ -984,7 +1055,16 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{self._app_name} — {proj.name}")
         self.challenge.context.setPlainText(proj.state.get_meta("user_context"))
         self._repopulate_panels()
-        self._status(f"Loaded project: {proj.name}")
+        # show THIS challenge's own conversation in the Agent tab
+        self.chat.set_transcript(self._transcripts.get(key, []))
+        # if this challenge's solver is waiting on input, re-arm the prompt
+        pa = self._pending_ask.get(key)
+        if pa:
+            self.chat.ask(pa[0], approval=pa[1])
+        running = bool(self.worker and self.worker.isRunning())
+        self._status(
+            f"Loaded: {proj.name}" + ("  (solving…)" if running else "")
+        )
 
     def _repopulate_panels(self) -> None:
         """Restore the panels from persisted project state on (re)open.
@@ -1051,22 +1131,30 @@ class MainWindow(QMainWindow):
             self._status(f"Saved project: {self.project.name}")
 
     def _start(self, auto: bool) -> None:
-        if not self.solver:
+        if not self.project:
             QMessageBox.warning(self, "No project", "Create/open a challenge first.")
             return
         if self.worker and self.worker.isRunning():
-            return
+            return  # this challenge is already solving (others may be too)
         self._persist_challenge_inputs()
-        self.solver.controls.stop = False
-        self.solver.controls.paused = False
-        self.solver.controls.afk = self.afk_chk.isChecked()
-        self.worker = SolverWorker(self.solver, auto=auto)
-        self.worker.finished_run.connect(self._on_worker_finished)
-        self.worker.start()
+        key = self._cur
+        if not self.solver:
+            self.solver = Solver(
+                self.project, self.config, ScopedBus(self.bus, key)
+            )
+        s = self.solver
+        s.controls.stop = False
+        s.controls.paused = False
+        s.controls.afk = self.afk_chk.isChecked()
+        w = SolverWorker(s, auto=auto)
+        w.finished_run.connect(lambda k=key: self._on_worker_finished(k))
+        self.worker = w
+        w.start()
         self._update_runtime_markers()
 
-    def _on_worker_finished(self) -> None:
-        self._status("Solver run finished")
+    def _on_worker_finished(self, key: str | None = None) -> None:
+        if key == self._cur:
+            self._status("Solver run finished")
         self._update_runtime_markers()
 
     def _toggle_pause(self) -> None:
@@ -1117,7 +1205,9 @@ class MainWindow(QMainWindow):
                 pass
         self.project.reset()
         # rebuild the solver so its in-memory budget/memory/KB start fresh too
-        self.solver = Solver(self.project, self.config, self.bus)
+        self.solver = Solver(
+            self.project, self.config, ScopedBus(self.bus, self._cur)
+        )
         self._repopulate_panels()
         self.token_lbl.setText("Tokens: 0")
         self._status(f"Reset '{self.project.name}' — agent progress cleared")
@@ -1178,67 +1268,115 @@ class MainWindow(QMainWindow):
         self._bridge = QtEventBridge(self.bus)
         self._bridge.event.connect(self._on_event)
 
+    def _on_answer(self, text: str) -> None:
+        if self.solver:
+            self.solver.provide_answer(text)
+        if self._cur:
+            self._pending_ask.pop(self._cur, None)
+
+    def _on_approval_reply(self, ok: bool) -> None:
+        if self.solver:
+            self.solver.provide_approval(ok)
+        if self._cur:
+            self._pending_ask.pop(self._cur, None)
+
+    def _record_chat(self, tkey: str, line: str) -> None:
+        """Append to a challenge's own conversation buffer (bounded)."""
+        t = self._transcripts.setdefault(tkey, [])
+        t.append(line)
+        if len(t) > 4000:
+            del t[:2000]
+
     def _on_event(self, ev: Event) -> None:
         p = ev.payload
-        if ev.type == EventType.LOG:
-            self.browser.append(f"[{p.get('level','info')}] {p.get('message','')}")
-        elif ev.type == EventType.ERROR:
-            self.browser.append(f"[error] {p.get('message','')}")
-            self.chat.system(f"error: {p.get('message','')}")
-            self._status(f"Error: {p.get('message','')}")
-        elif ev.type == EventType.BROWSER_ACTION:
-            self.browser.append(f"browser: {p}")
-        elif ev.type == EventType.PAGE_OBSERVED:
-            obs = p.get("observation", {})
-            self.browser.append(
-                f"observed {obs.get('url','')} — {obs.get('title','')}"
-            )
-        elif ev.type == EventType.DOWNLOAD:
-            self.browser.add_download(p.get("path", ""), p.get("sha256", ""))
-        elif ev.type == EventType.TOOL_RESULT:
-            self.tools.add_result(
-                p.get("tool", "?"), p.get("summary", ""), p.get("returncode")
-            )
-        elif ev.type == EventType.LLM_ACTION:
-            self.chat.set_action(
-                p.get("hypothesis", ""), p.get("thought", ""), p.get("action", {})
-            )
-        elif ev.type == EventType.ASK_USER:
-            if p.get("afk_auto"):
-                # AFK already auto-resolved this — show it for the record
-                # only; do NOT arm inputs / steal focus / switch tabs.
-                self.chat.system(
-                    f"[AFK auto-resolved] {p.get('question', '')}"
+        pid = p.get("project")
+        cur = self._cur
+        # events with no project (global logs) belong to the current view
+        is_cur = pid is None or pid == cur
+        tkey = pid or cur or "_"
+        t = ev.type
+
+        if t == EventType.LOG:
+            if is_cur:
+                self.browser.append(
+                    f"[{p.get('level','info')}] {p.get('message','')}"
                 )
+        elif t == EventType.ERROR:
+            self._record_chat(tkey, f"· error: {p.get('message','')}")
+            if is_cur:
+                self.browser.append(f"[error] {p.get('message','')}")
+                self.chat.system(f"error: {p.get('message','')}")
+                self._status(f"Error: {p.get('message','')}")
+        elif t == EventType.BROWSER_ACTION:
+            if is_cur:
+                self.browser.append(f"browser: {p}")
+        elif t == EventType.PAGE_OBSERVED:
+            if is_cur:
+                obs = p.get("observation", {})
+                self.browser.append(
+                    f"observed {obs.get('url','')} — {obs.get('title','')}"
+                )
+        elif t == EventType.DOWNLOAD:
+            if is_cur:
+                self.browser.add_download(p.get("path", ""),
+                                          p.get("sha256", ""))
+        elif t == EventType.TOOL_RESULT:
+            if is_cur:
+                self.tools.add_result(p.get("tool", "?"),
+                                      p.get("summary", ""),
+                                      p.get("returncode"))
+        elif t == EventType.LLM_ACTION:
+            self._record_chat(tkey, f"agent> {p.get('thought','')}")
+            if is_cur:
+                self.chat.set_action(p.get("hypothesis", ""),
+                                     p.get("thought", ""),
+                                     p.get("action", {}))
+        elif t == EventType.ASK_USER:
+            q = p.get("question", "")
+            if p.get("afk_auto"):
+                self._record_chat(tkey, f"· [AFK auto-resolved] {q}")
+                if is_cur:
+                    self.chat.system(f"[AFK auto-resolved] {q}")
             else:
-                self.chat.ask(p.get("question", ""),
-                              approval=p.get("approval", False))
-                self.tabs.setCurrentWidget(self.chat)
-                self.activateWindow()
-                self.raise_()
-        elif ev.type == EventType.FLAG_CANDIDATE:
-            self.challenge.add_flag(
-                p.get("value", ""), p.get("source", ""), p.get("confidence", 0.0)
-            )
-        elif ev.type == EventType.NOTE:
-            self.challenge.add_note(p.get("content", ""), p.get("kind", "note"))
-        elif ev.type == EventType.TOKENS:
-            self.token_lbl.setText(
-                f"Tokens: {p.get('session', 0):,}/"
-                f"{p.get('session_limit', 0):,}  "
-                f"(proj {p.get('project_total', 0):,}, {p.get('backend','?')})"
-            )
-        elif ev.type == EventType.SOLVER_STATE:
+                self._record_chat(tkey, f"agent asks> {q}")
+                self._pending_ask[tkey] = (q, bool(p.get("approval", False)))
+                if is_cur:
+                    self.chat.ask(q, approval=p.get("approval", False))
+                    self.tabs.setCurrentWidget(self.chat)
+                    self.activateWindow()
+                    self.raise_()
+        elif t == EventType.FLAG_CANDIDATE:
+            if is_cur:
+                self.challenge.add_flag(p.get("value", ""),
+                                        p.get("source", ""),
+                                        p.get("confidence", 0.0))
+        elif t == EventType.NOTE:
+            if is_cur:
+                self.challenge.add_note(p.get("content", ""),
+                                        p.get("kind", "note"))
+        elif t == EventType.TOKENS:
+            if is_cur:
+                self.token_lbl.setText(
+                    f"Tokens: {p.get('session', 0):,}/"
+                    f"{p.get('session_limit', 0):,}  "
+                    f"(proj {p.get('project_total', 0):,}, "
+                    f"{p.get('backend','?')})"
+                )
+        elif t == EventType.SOLVER_STATE:
             state = p.get("state", "?")
-            self.solve_state.setText(state)
             step = p.get("step")
-            self.chat.system(
-                f"solver: {state}" + (f" (step {step})" if step else "")
+            self._record_chat(
+                tkey,
+                f"· solver: {state}" + (f" (step {step})" if step else ""),
             )
-            if state == "solved":
-                self._status(f"SOLVED — flag {p.get('flag','')}")
-            # persisted-status transitions rebuild the tree (badge text);
-            # everything else just refreshes the live ▶/⏸/■ markers.
+            if is_cur:
+                self.solve_state.setText(state)
+                self.chat.system(
+                    f"solver: {state}" + (f" (step {step})" if step else "")
+                )
+                if state == "solved":
+                    self._status(f"SOLVED — flag {p.get('flag','')}")
+            # sidebar badges/markers are global — always update
             if state in STATUS_LABELS:
                 self._refresh_projects()
             else:
