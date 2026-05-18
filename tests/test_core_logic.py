@@ -135,6 +135,29 @@ def test_args_coercion_accepts_bool_int_list():
     assert a["none"] == ""
 
 
+def test_parse_action_batch_steps():
+    r = parse_llm_response(
+        '{"hypothesis":"h","actions":['
+        '{"type":"file.write","name":"","args":{"file":"a.py","content":"x"}},'
+        '{"type":"tool.run","name":"python","args":{"file":"a.py"}},'
+        '{"type":"file.inspect","name":"","args":{"file":"out.txt"}}]}'
+    )
+    s = r.steps()
+    assert [a.type for a in s] == [
+        "file.write", "tool.run", "file.inspect"]
+    # single-action form still works and steps() falls back to it
+    r2 = parse_llm_response(
+        '{"action":{"type":"notes.add","name":"","args":{"content":"hi"}}}'
+    )
+    assert r2.action.type == "notes.add"
+    assert len(r2.steps()) == 1 and r2.steps()[0].type == "notes.add"
+
+
+def test_parse_rejects_response_with_no_action():
+    with pytest.raises(ValueError):
+        parse_llm_response('{"hypothesis":"h","risk":"low"}')
+
+
 def test_parse_rejects_unknown_action_type():
     with pytest.raises(ValueError):
         parse_llm_response('{"action":{"type":"os.system","name":"rm"}}')

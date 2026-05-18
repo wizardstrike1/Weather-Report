@@ -37,6 +37,16 @@ from ..tools.runner import ToolRunner
 from ..writeup import generator
 
 
+# Actions safe to chain within ONE turn (read/build, no page-state change,
+# no human decision). Anything else ends the batch so the next turn decides
+# on fresh observations.
+_BATCHABLE = {
+    "file.inspect", "file.extract", "file.write", "tool.run",
+    "web.search", "web.fetch", "browser.storage", "browser.fetch",
+    "browser.wait", "notes.add",
+}
+
+
 @dataclass
 class SolverControls:
     paused: bool = False
@@ -337,20 +347,21 @@ class Solver:
                 continue
             self._parse_fails = 0
 
-            # repeated-action guard: stop the agent spinning on one action
-            sig = (
-                f"{resp.action.type}|{resp.action.name}|"
-                + json.dumps(resp.action.args, sort_keys=True)
-            )
+            batch = resp.steps()
+            first = batch[0]
+
+            # repeated-action guard (on the first step of the turn)
+            sig = (f"{first.type}|{first.name}|"
+                   + json.dumps(first.args, sort_keys=True))
             self._repeat = self._repeat + 1 if sig == self._last_sig else 0
             self._last_sig = sig
             if self._repeat >= 3:
                 self._repeat = 0
                 self._ask(
                     f"The agent is stuck repeating "
-                    f"'{resp.action.type} {resp.action.name}' with the same "
-                    f"args. Reply with a specific instruction for what to do "
-                    f"differently (plain text), or type 'stop' to halt."
+                    f"'{first.type} {first.name}' with the same args. Reply "
+                    f"with a specific instruction for what to do differently "
+                    f"(plain text), or type 'stop' to halt."
                 )
                 if self._pending_answer is not None:
                     self.project.state.add_fact(
@@ -362,23 +373,39 @@ class Solver:
                     return
                 continue
 
-            self.bus.publish(
-                EventType.LLM_ACTION,
-                hypothesis=resp.hypothesis,
-                thought=resp.thought_summary,
-                action=resp.action.model_dump(),
-                risk=resp.risk,
-            )
             for n in resp.notes_to_save:
                 self.project.state.add_note(n, "note")
 
-            cont, last_obs = self._dispatch(resp)
-            self.memory.record_turn(f"{resp.action.type} {resp.action.name}")
+            # Execute the batch IN ORDER (one LLM call amortised over several
+            # actions). Stop the batch the moment a step is a decision /
+            # page-changing / interactive action so the next turn re-decides
+            # on fresh state. Safe read/build steps chain freely.
+            cont = True
+            for j, act in enumerate(batch[:6]):
+                self.bus.publish(
+                    EventType.LLM_ACTION, hypothesis=resp.hypothesis,
+                    thought=resp.thought_summary,
+                    action=act.model_dump(), risk=resp.risk,
+                )
+                one = LLMResponse(
+                    thought_summary=resp.thought_summary,
+                    hypothesis=resp.hypothesis, action=act,
+                    risk=resp.risk,
+                    needs_user_approval=resp.needs_user_approval,
+                )
+                cont, obs = self._dispatch(one)
+                if obs:
+                    last_obs = obs
+                self.memory.record_turn(f"{act.type} {act.name}")
+                if not cont:
+                    break
+                if act.type not in _BATCHABLE:
+                    break  # decision/interactive/page-changing -> re-observe
+
             if not cont or not auto:
                 self.bus.publish(
                     EventType.SOLVER_STATE,
-                    state="idle" if cont else "finished",
-                    step=step,
+                    state="idle" if cont else "finished", step=step,
                 )
                 return
         self.bus.publish(EventType.SOLVER_STATE, state="max_steps_reached")
