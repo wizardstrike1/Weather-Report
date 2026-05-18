@@ -76,6 +76,16 @@ class ChatPanel(QWidget):
         """Surface solver state / errors here so the Agent tab is never blank."""
         self.transcript.appendPlainText(f"· {msg}")
 
+    def set_transcript(self, lines: list[str]) -> None:
+        """Replace the visible conversation when switching challenges (each
+        challenge has its own)."""
+        self.hypothesis.setText("Hypothesis: —")
+        self.next_action.setText("Next action: —")
+        self.prompt_label.setText("")
+        self.transcript.setPlainText("\n".join(lines))
+        sb = self.transcript.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
     def ask(self, question: str, approval: bool = False) -> None:
         self.prompt_label.setText(f"❓ INPUT NEEDED:\n{question}")
         self.transcript.appendPlainText(f"agent asks> {question}")

@@ -56,3 +56,26 @@ class EventBus:
 
     def log(self, message: str, level: str = "info") -> None:
         self.publish(EventType.LOG, message=message, level=level)
+
+
+class ScopedBus:
+    """Wraps an EventBus, stamping every event with a fixed ``project`` id.
+
+    One Solver gets one ScopedBus, so the GUI can route each event to the
+    right per-challenge conversation and run several solves at once without
+    their output bleeding together. Same publish/log/subscribe surface as
+    EventBus (Solver only needs publish/log)."""
+
+    def __init__(self, bus: "EventBus", project: str) -> None:
+        self._bus = bus
+        self._project = project
+
+    def publish(self, etype: EventType, **payload: Any) -> None:
+        payload.setdefault("project", self._project)
+        self._bus.publish(etype, **payload)
+
+    def log(self, message: str, level: str = "info") -> None:
+        self.publish(EventType.LOG, message=message, level=level)
+
+    def subscribe(self, etype: EventType, handler: Callable[[Event], None]) -> None:
+        self._bus.subscribe(etype, handler)
