@@ -47,6 +47,10 @@ def test_tool_router_accepts_browser_storage_and_fetch():
     )
     assert r2.action.type == "browser.fetch"
     assert r2.action.args["bearer_ls_key"] == "rctf-token"
+    r3 = parse_llm_response(
+        '{"action":{"type":"browser.wait","name":"","args":{"ms":4000}}}'
+    )
+    assert r3.action.type == "browser.wait" and r3.action.args["ms"] == "4000"
 
 
 def test_tool_router_accepts_session_and_net():

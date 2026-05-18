@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 class BrowserPanel(QWidget):
     import_requested = Signal()
+    manual_login_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -27,6 +28,13 @@ class BrowserPanel(QWidget):
         self.search = QLineEdit(placeholderText="Filter log…")
         row.addWidget(QLabel("Browser action log"))
         row.addWidget(self.search)
+        self.login_btn = QPushButton("Manual login…")
+        self.login_btn.setToolTip(
+            "Open the agent's OWN browser at the challenge URL so you can log "
+            "in / pass Cloudflare once. The session persists for the solve."
+        )
+        self.login_btn.clicked.connect(self.manual_login_requested.emit)
+        row.addWidget(self.login_btn)
         lay.addLayout(row)
 
         self.log = QPlainTextEdit(readOnly=True)
