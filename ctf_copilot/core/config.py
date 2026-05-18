@@ -77,6 +77,10 @@ class AppConfig(BaseModel):
     # 0 = no step cap (recommended): the per-session token budget + Stop +
     # flag-found terminate the run. A positive value adds a hard step ceiling.
     max_solver_steps: int = Field(default=0, ge=0, le=100_000)
+    # Auto update-check throttle (minutes). Checked once at startup, then at
+    # most this often when you re-focus the app. 0 = startup + manual only.
+    # No background timer — zero cost while idle/minimized.
+    update_check_minutes: int = Field(default=30, ge=0, le=1440)
 
     # --- not persisted ---
     @property

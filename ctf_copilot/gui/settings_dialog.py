@@ -37,6 +37,14 @@ class SettingsDialog(QDialog):
             "0 = no step cap (token budget + Stop govern the run). "
             "A positive value adds a hard step ceiling."
         )
+        self.upd_min = QSpinBox()
+        self.upd_min.setRange(0, 1440)
+        self.upd_min.setValue(config.update_check_minutes)
+        self.upd_min.setToolTip(
+            "Auto update-check throttle in minutes (checked at startup, then "
+            "at most this often when you re-focus the app — no background "
+            "polling). 0 = startup + manual only."
+        )
         self.allowed = QLineEdit(", ".join(config.allowed_domains))
         self.allow_all = QCheckBox(
             "Allow ALL domains (CTF-only — disables target-scope safety)"
@@ -83,6 +91,7 @@ class SettingsDialog(QDialog):
         form.addRow("Max tokens / step", self.max_tokens)
         form.addRow("Summarize after N", self.summarize_n)
         form.addRow("Max solver steps (0 = unlimited)", self.max_steps)
+        form.addRow("Auto update-check (min, 0 = off)", self.upd_min)
         form.addRow("Allowed domains (comma-sep)", self.allowed)
         form.addRow(self.allow_all)
         form.addRow("Flag regexes ( | -sep)", self.flag_re)
@@ -111,6 +120,7 @@ class SettingsDialog(QDialog):
         c.max_tokens_per_step = self.max_tokens.value()
         c.summarize_after_n_messages = self.summarize_n.value()
         c.max_solver_steps = self.max_steps.value()
+        c.update_check_minutes = self.upd_min.value()
         c.allowed_domains = [
             d.strip() for d in self.allowed.text().split(",") if d.strip()
         ]
