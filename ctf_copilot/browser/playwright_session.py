@@ -90,18 +90,53 @@ class PlaywrightSession:
             pass
         return self.observe()
 
+    def _locate(self, page, ref: str):
+        """Resolve a value the model gave us into a Playwright locator,
+        trying the observer handle first, then a CSS selector, then visible
+        text / accessible name. Returns a locator or None."""
+        candidates = []
+        r = (ref or "").strip()
+        if r:
+            # observer handle (buttons/links/inputs carry data-ctfc="eN")
+            candidates.append(page.locator(f'[data-ctfc="{r}"]'))
+            if any(c in r for c in "#.[]>=:") or r.split(":")[0] in (
+                "button", "input", "a", "form", "textarea", "select"
+            ):
+                candidates.append(page.locator(r))
+            candidates.append(page.get_by_role("button", name=r, exact=False))
+            candidates.append(page.get_by_text(r, exact=False))
+        for loc in candidates:
+            try:
+                if loc.count() > 0:
+                    return loc.first
+            except Exception:
+                continue
+        return None
+
     def click(self, ref_text: str) -> dict[str, Any]:
         page = self._ensure()
-        # ref_text is human text or a CSS selector; try selector then text
+        loc = self._locate(page, ref_text)
+        if loc is None:
+            raise RuntimeError(
+                f"click: could not resolve {ref_text!r} — use the 'ref' "
+                f"value from the latest observation's buttons/links."
+            )
+        loc.click(timeout=8000)
         try:
-            page.click(ref_text, timeout=8000)
+            page.wait_for_load_state("networkidle", timeout=8000)
         except Exception:
-            page.get_by_text(ref_text, exact=False).first.click(timeout=8000)
-        page.wait_for_load_state("domcontentloaded")
+            pass
         return self.observe()
 
     def fill(self, selector: str, value: str) -> dict[str, Any]:
-        self._ensure().fill(selector, value, timeout=8000)
+        page = self._ensure()
+        loc = self._locate(page, selector)
+        if loc is None:
+            raise RuntimeError(
+                f"fill: could not resolve {selector!r} — use the input's "
+                f"'ref' from the latest observation."
+            )
+        loc.fill(value, timeout=8000)
         return self.observe()
 
     def upload(self, selector: str, file_paths: list[str]) -> dict[str, Any]:
@@ -112,8 +147,35 @@ class PlaywrightSession:
 
     def submit(self, form_selector: str = "form") -> dict[str, Any]:
         page = self._ensure()
-        page.eval_on_selector(form_selector, "f => f.submit()")
-        page.wait_for_load_state("domcontentloaded")
+        # Many SPAs (rCTF) have a button and NO <form> — old code
+        # eval_on_selector('form') just errored. Try, in order: a real form's
+        # requestSubmit, click a submit/login-ish control, else press Enter.
+        ok = page.evaluate(
+            """(sel) => {
+                let f = document.querySelector(sel) ||
+                        document.querySelector('form');
+                if (f && f.tagName === 'FORM') {
+                    (f.requestSubmit ? f.requestSubmit() : f.submit());
+                    return true;
+                }
+                const b = [...document.querySelectorAll(
+                  'button,input[type=submit],input[type=button],[role=button]')]
+                  .find(e => /log\\s?in|sign\\s?in|submit|continue|register/i
+                        .test((e.innerText||e.value||'')));
+                if (b) { b.click(); return true; }
+                return false;
+            }""",
+            form_selector,
+        )
+        if not ok:
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
         return self.observe()
 
     def go_back(self) -> dict[str, Any]:
