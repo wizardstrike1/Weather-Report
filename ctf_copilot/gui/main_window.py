@@ -7,7 +7,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, QProcess, Signal
+from PySide6.QtCore import QEvent, Qt, QThread, QTimer, QProcess, Signal
 from PySide6.QtGui import QAction, QKeySequence, QPalette, QColor
 from PySide6.QtWidgets import (
     QApplication,
@@ -386,16 +386,38 @@ class MainWindow(QMainWindow):
         # past it (e.g. changes authored in this same clone), the running
         # code is stale even though `git` says we're not "behind" the remote.
         self._boot_commit = updater.head_commit()
+        self._last_update_check = 0.0
         if not updater.is_git_checkout():
             return  # zip / frozen build: silently unsupported
-        QTimer.singleShot(3000, self._run_update_check)  # shortly after start
-        self._update_timer = QTimer(self)
-        self._update_timer.timeout.connect(self._run_update_check)
-        self._update_timer.start(30 * 60 * 1000)  # every 30 min
+        # No recurring timer (zero idle/background polling). One check shortly
+        # after startup; thereafter only when you re-focus the window, and
+        # then at most once per `update_check_minutes` (0 = startup+manual
+        # only). A check is a tiny background `git fetch` on a private repo.
+        QTimer.singleShot(3000, self._run_update_check)
+
+    def changeEvent(self, e) -> None:  # noqa: N802 (Qt override)
+        # Event-driven, throttled: checking when you come back to the app
+        # costs nothing while it's idle/minimized.
+        if (e.type() == QEvent.Type.ActivationChange
+                and self.isActiveWindow()):
+            self._run_update_check()
+        super().changeEvent(e)
 
     def _run_update_check(self, manual: bool = False) -> None:
         if self._update_thread and self._update_thread.isRunning():
             return
+        if not updater.is_git_checkout():
+            return
+        import time as _t
+
+        mins = getattr(self.config, "update_check_minutes", 30)
+        if not manual:
+            if mins <= 0:  # auto disabled — startup & manual only
+                if self._last_update_check:  # startup one already ran
+                    return
+            elif (_t.monotonic() - self._last_update_check) < mins * 60:
+                return  # throttled
+        self._last_update_check = _t.monotonic()
         self._manual_check = manual
         self._update_thread = UpdateChecker()
         self._update_thread.done.connect(self._on_update_status)
