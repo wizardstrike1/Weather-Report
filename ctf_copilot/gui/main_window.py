@@ -254,6 +254,7 @@ class MainWindow(QMainWindow):
         # connect panel signals ONCE (reconnecting per project load would
         # multiply every action by the number of times a project was opened)
         self.challenge.add_hint_btn.clicked.connect(self._add_hint)
+        self.challenge.reset_requested.connect(self._reset_challenge)
         self.writeup.generate_requested.connect(self._generate_writeup)
         self.chat.answer_submitted.connect(
             lambda t: self.solver and self.solver.provide_answer(t)
@@ -1069,6 +1070,35 @@ class MainWindow(QMainWindow):
             self.project.state.add_note(text, "hint")
             self.challenge.add_note(text, "hint")
             self.challenge.hint_edit.clear()
+
+    def _reset_challenge(self) -> None:
+        if not self.project:
+            QMessageBox.warning(self, "No project", "Open a challenge first.")
+            return
+        if QMessageBox.question(
+            self, "Reset challenge",
+            "Clear ALL agent progress for this challenge — facts, tool runs, "
+            "flag candidates, notes/hypotheses, and generated artifacts / "
+            "logs / screenshots?\n\nKeeps: name, category, URL, context, "
+            "your hints, downloaded files, and the browser login.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        # stop a running solve and tear its session down before wiping files
+        if self.solver:
+            self.solver.controls.stop = True
+        if self.worker and self.worker.isRunning():
+            self.worker.wait(6000)
+        if self.solver:
+            try:
+                self.solver.shutdown()
+            except Exception:
+                pass
+        self.project.reset()
+        # rebuild the solver so its in-memory budget/memory/KB start fresh too
+        self.solver = Solver(self.project, self.config, self.bus)
+        self._repopulate_panels()
+        self.token_lbl.setText("Tokens: 0")
+        self._status(f"Reset '{self.project.name}' — agent progress cleared")
 
     def _generate_writeup(self) -> None:
         if not self.project:

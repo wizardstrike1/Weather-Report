@@ -238,6 +238,18 @@ class Project:
             self.state.set_meta(key, val)
         self._write_manifest()
 
+    def reset(self) -> None:
+        """Start this challenge over: clear agent working memory + generated
+        artifacts/logs/screenshots/tool_outputs. KEEPS project.json identity,
+        user context, hints, downloaded challenge files and the browser
+        profile (auth session). Caller must stop the solver first."""
+        self.state.reset_agent_state()
+        for sub in ("artifacts", "screenshots", "logs", "tool_outputs"):
+            d = self.root / sub
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
+            d.mkdir(parents=True, exist_ok=True)
+
     def set_status(self, status: str) -> None:
         self.state.set_meta("status", status)
 
