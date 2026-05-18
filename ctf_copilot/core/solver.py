@@ -558,6 +558,8 @@ class Solver:
                 self.project.state.add_download(d["path"], d["source_url"], d["sha256"])
                 self.bus.publish(EventType.DOWNLOAD, **d)
                 self._scan_file_for_flags(d["path"])
+        elif t == "wait":
+            obs = sess.wait(int(a.args.get("ms", "2000") or 2000))
         elif t == "storage":
             st = sess.storage()
             blob = __import__("json").dumps(st)[:6000]

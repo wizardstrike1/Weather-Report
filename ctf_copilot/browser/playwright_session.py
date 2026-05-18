@@ -70,6 +70,24 @@ class PlaywrightSession:
     def open_url(self, url: str) -> dict[str, Any]:
         page = self._ensure()
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # SPAs (rCTF/CTFd) do the token->JWT exchange + localStorage write
+        # ASYNCHRONOUSLY after DOMContentLoaded. Wait for the network to
+        # settle so auth completes before we observe (best-effort).
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        return self.observe()
+
+    def wait(self, ms: int = 2000) -> dict[str, Any]:
+        """Explicit settle for async SPA work (e.g. after a token login,
+        before reading storage)."""
+        page = self._ensure()
+        page.wait_for_timeout(max(0, min(ms, 30000)))
+        try:
+            page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
         return self.observe()
 
     def click(self, ref_text: str) -> dict[str, Any]:

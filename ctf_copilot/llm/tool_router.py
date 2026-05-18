@@ -21,6 +21,7 @@ ActionType = Literal[
     "browser.screenshot",
     "browser.storage",
     "browser.fetch",
+    "browser.wait",
     "file.inspect",
     "file.extract",
     "file.write",

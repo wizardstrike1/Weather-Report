@@ -114,6 +114,51 @@ class ScanWorker(QThread):
                     pass
 
 
+class ManualLoginWorker(QThread):
+    """Open the agent's OWN Playwright browser (same per-project profile the
+    solver reuses) so the user can log in / pass Cloudflare once. The
+    persistent context flushes cookies+localStorage to disk on close, so the
+    subsequent solve is authenticated — this bridges 'I have the login' into
+    the agent's separate browser."""
+
+    opened = Signal()
+    failed = Signal(str)
+
+    def __init__(self, profile_dir, downloads, screenshots, url: str) -> None:
+        super().__init__()
+        self._args = (profile_dir, downloads, screenshots, url)
+        self._stop = False
+
+    def finish(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:
+        from ..browser.playwright_session import PlaywrightSession
+
+        profile, downloads, screenshots, url = self._args
+        sess = None
+        try:
+            sess = PlaywrightSession(profile, downloads, screenshots,
+                                     headless=False)
+            sess.start()
+            if url:
+                try:
+                    sess.open_url(url)
+                except Exception:
+                    pass
+            self.opened.emit()
+            while not self._stop:
+                self.msleep(300)
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(f"{type(e).__name__}: {e}")
+        finally:
+            if sess is not None:
+                try:
+                    sess.stop()  # flushes the persistent profile to disk
+                except Exception:
+                    pass
+
+
 class ProjectTree(QTreeWidget):
     """Tree of competitions -> challenges with drag-drop of a challenge onto
     another competition group."""
@@ -205,6 +250,7 @@ class MainWindow(QMainWindow):
         self.chat = ChatPanel()
         self.writeup = WriteupPanel()
         self.browser.import_requested.connect(self._import_files)
+        self.browser.manual_login_requested.connect(self._manual_login)
         # connect panel signals ONCE (reconnecting per project load would
         # multiply every action by the number of times a project was opened)
         self.challenge.add_hint_btn.clicked.connect(self._add_hint)
@@ -730,6 +776,45 @@ class MainWindow(QMainWindow):
         "Upload a saved HTML file of the challenge list (offline)",
     ]
 
+    def _manual_login(self) -> None:
+        if not self.project:
+            QMessageBox.warning(self, "No project", "Open a challenge first.")
+            return
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(
+                self, "Solver running",
+                "Stop the solver first — it and the manual-login browser "
+                "share one profile and can't run together.",
+            )
+            return
+        if getattr(self, "_login_worker", None) and \
+                self._login_worker.isRunning():
+            return
+        self._persist_challenge_inputs()  # ensure URL is saved
+        url = (self.challenge.url.text().strip()
+               or self.project.state.get_meta("url"))
+        prof = self.project.root / "browser-profile"
+        self._login_worker = ManualLoginWorker(
+            prof, self.project.downloads_dir, self.project.screenshots_dir, url
+        )
+        self._login_worker.failed.connect(
+            lambda m: QMessageBox.warning(self, "Manual login failed", m)
+        )
+        self._login_worker.opened.connect(self._manual_login_prompt)
+        self._status("Opening agent browser for manual login…")
+        self._login_worker.start()
+
+    def _manual_login_prompt(self) -> None:
+        QMessageBox.information(
+            self, "Manual login",
+            "A browser window opened (the agent's OWN browser). Log in / "
+            "solve any Cloudflare check / open your token URL there, then "
+            "click OK.\n\nThe session is saved and the solver will reuse it.",
+        )
+        if getattr(self, "_login_worker", None):
+            self._login_worker.finish()
+            self._status("Login session saved — start the solve to use it.")
+
     def _import_site(self) -> None:
         mode, ok = QInputDialog.getItem(
             self, "Import site", "How do you want to import?",
@@ -853,6 +938,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self._persist_challenge_inputs()
+        lw = getattr(self, "_login_worker", None)
+        if lw and lw.isRunning():
+            lw.finish()
+            lw.wait(4000)
         if self.solver:
             self.solver.controls.stop = True
             self.solver.shutdown()
