@@ -523,7 +523,11 @@ class Solver:
         elif t == "click":
             obs = sess.click(a.args.get("ref", a.name))
         elif t == "fill":
-            obs = sess.fill(a.args["selector"], a.args.get("value", ""))
+            obs = sess.fill(
+                a.args.get("ref") or a.args.get("selector")
+                or a.args.get("name", ""),
+                a.args.get("value", ""),
+            )
         elif t == "upload":
             raw = a.args.get("files", a.args.get("file", ""))
             files = [

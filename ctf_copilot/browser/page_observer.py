@@ -25,10 +25,18 @@ _JS_OBSERVE = r"""
       hidden: e.type==='hidden'
     }))
   }));
+  // Assign every interactive element a REAL, resolvable handle in the DOM
+  // (data-ctfc="<ref>") and return that ref so browser.click/fill can find
+  // it via [data-ctfc="<ref>"]. Previously refs were opaque labels nothing
+  // could resolve, so every click timed out.
+  let _n = 0;
+  const ref = el => { const r = 'e' + (_n++);
+                      el.setAttribute('data-ctfc', r); return r; };
   const tag = (sel, attr) => [...document.querySelectorAll(sel)]
-    .filter(vis).slice(0,40).map((el,i)=>({
-      ref: sel.replace(/[^a-z]/g,'')+i,
-      text: (el.innerText||el.value||'').trim().slice(0,60),
+    .filter(vis).slice(0,40).map(el=>({
+      ref: ref(el),
+      text: (el.innerText||el.value||el.getAttribute('aria-label')
+             ||el.getAttribute('placeholder')||'').trim().slice(0,60),
       [attr]: el.getAttribute(attr)||''
     }));
   return {
@@ -37,10 +45,13 @@ _JS_OBSERVE = r"""
     visible_text: txt.slice(0, 1500),
     text_len: txt.length,
     forms,
-    buttons: tag('button, input[type=submit]', 'name'),
+    buttons: tag('button, input[type=submit], input[type=button], '
+                 + '[role=button], a.btn', 'name'),
     links: tag('a[href]', 'href'),
     inputs: [...document.querySelectorAll('input,select,textarea')]
-      .slice(0,40).map((e,i)=>({ref:'in'+i, name:e.name||'', type:e.type||e.tagName.toLowerCase()})),
+      .filter(vis).slice(0,40).map(e=>({ref:ref(e), name:e.name||'',
+        type:e.type||e.tagName.toLowerCase(),
+        placeholder:e.getAttribute('placeholder')||''})),
     cookie_keys: document.cookie.split(';').map(c=>c.split('=')[0].trim()).filter(Boolean),
     localStorage_keys: Object.keys(localStorage||{}),
   };

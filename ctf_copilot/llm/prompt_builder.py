@@ -25,7 +25,10 @@ notes.add, ask_user, flag.submit_candidate, writeup.update, done.
 Rules:
 - One minimal targeted action/turn. Observations are STRUCTURED, not raw
   pages; request DOM/screenshots only if visual (explicit action; may be
-  declined). Host validates every action; invalid/unsafe ones bounce back.
+  declined). For browser.click/fill pass the exact "ref" from the latest
+  observation's buttons/links/inputs (e.g. "e7"); browser.submit auto-finds
+  the login/submit control. Host validates every action; invalid/unsafe
+  ones bounce back.
   Brief hypothesis; never reveal private chain-of-thought.
 - Autonomy: do it yourself, never ask the user to run/paste. Code:
   file.write{"file":"artifacts/x.py","content":..} then
