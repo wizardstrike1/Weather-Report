@@ -19,6 +19,8 @@ ActionType = Literal[
     "browser.download",
     "browser.upload",
     "browser.screenshot",
+    "browser.storage",
+    "browser.fetch",
     "file.inspect",
     "file.extract",
     "file.write",
