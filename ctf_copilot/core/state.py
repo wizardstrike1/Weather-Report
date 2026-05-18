@@ -30,6 +30,28 @@ class StateStore:
         with self._lock:
             self._conn.close()
 
+    def reset_agent_state(self) -> None:
+        """Wipe everything the AGENT produced (facts, tried actions, tool
+        outputs, flag candidates, notes/hypotheses/open-questions) while
+        preserving the challenge identity (meta name/category/url/
+        flag_format/competition/difficulty/user_context), the user's hints,
+        and downloaded challenge files. Status -> incomplete, tokens -> 0."""
+        with self._lock:
+            c = self._conn
+            for tbl in ("facts", "actions", "tool_outputs",
+                        "flag_candidates"):
+                c.execute(f"DELETE FROM {tbl}")
+            c.execute("DELETE FROM notes WHERE kind != 'hint'")
+            for k, v in (("status", "incomplete"), ("tokens_spent", "0")):
+                c.execute(
+                    "INSERT INTO meta(key,value) VALUES(?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (k, v),
+                )
+            # so the user context is re-seeded as a fact on the next run
+            c.execute("DELETE FROM meta WHERE key='user_context_seen'")
+            self._conn.commit()
+
     # ---- generic helpers -------------------------------------------------
     def _exec(self, sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         with self._lock:

@@ -1,6 +1,7 @@
 """Challenge / context input + notes, hypotheses and flag-candidate views."""
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import (
 
 
 class ChallengePanel(QWidget):
+    reset_requested = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         lay = QVBoxLayout(self)
@@ -43,6 +46,15 @@ class ChallengePanel(QWidget):
         hint_row.addWidget(self.hint_edit)
         hint_row.addWidget(self.add_hint_btn)
         lay.addLayout(hint_row)
+
+        self.reset_btn = QPushButton("Reset challenge (clear agent progress)")
+        self.reset_btn.setToolTip(
+            "Wipe facts, tool runs, flags, notes/hypotheses and generated "
+            "artifacts/logs/screenshots. Keeps name/category/URL/context, "
+            "your hints, downloaded files and the browser login."
+        )
+        self.reset_btn.clicked.connect(self.reset_requested.emit)
+        lay.addWidget(self.reset_btn)
 
         lay.addWidget(QLabel("Notes / hypotheses"))
         self.notes = QListWidget()

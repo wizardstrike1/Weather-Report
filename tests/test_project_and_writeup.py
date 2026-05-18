@@ -153,6 +153,48 @@ def test_move_project_dedupes_name_clash(tmp_path):
     assert moved.name != p1.root.name
 
 
+def test_reset_clears_agent_state_keeps_identity(tmp_path):
+    p = Project.create(tmp_path, "ResetMe", category="web",
+                       url="https://ctf.x/c", competition="EventR")
+    st = p.state
+    st.set_meta("user_context", "given hint context")
+    st.add_fact("agent fact")
+    st.add_action("tool.run", "ran strings", True)
+    st.add_tool_output("strings", "argv", "out", "log")
+    st.add_flag_candidate("flag{wrong}", "agent", 0.4)
+    st.add_note("a hypothesis", "hypothesis")
+    st.add_note("user hint kept", "hint")
+    st.add_download("downloads/chal.bin", "import:x", "deadbeef")
+    (p.artifacts_dir / "solve.py").write_text("print(1)", "utf-8")
+    (p.screenshots_dir / "s.png").write_bytes(b"x")
+    p.set_solved(True)
+    st.set_meta("tokens_spent", "12345")
+
+    p.reset()
+
+    # identity preserved
+    assert p.state.get_meta("name") == "ResetMe"
+    assert p.state.get_meta("url") == "https://ctf.x/c"
+    assert p.state.get_meta("competition") == "EventR"
+    assert p.state.get_meta("user_context") == "given hint context"
+    assert read_card(p.root)["category"] == "web"  # manifest intact
+    # agent state cleared
+    assert p.state.facts() == []
+    assert p.state.flag_candidates() == []
+    assert list(p.state.recent_actions()) == []
+    assert p.state.get_meta("status") == "incomplete"
+    assert p.state.get_meta("tokens_spent") == "0"
+    # hints + downloads kept; hypotheses/notes gone
+    notes = p.state.notes()
+    assert any(n["kind"] == "hint" for n in notes)
+    assert not any(n["kind"] == "hypothesis" for n in notes)
+    assert [r["path"] for r in p.state.downloads()] == ["downloads/chal.bin"]
+    # generated dirs emptied but still exist
+    assert p.artifacts_dir.is_dir()
+    assert list(p.artifacts_dir.iterdir()) == []
+    assert list(p.screenshots_dir.iterdir()) == []
+
+
 def test_state_snapshot_is_bounded(tmp_path):
     proj = Project.create(tmp_path, "snap")
     for i in range(50):
