@@ -9,7 +9,13 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 ActionType = Literal[
     "browser.open_url",
@@ -74,10 +80,22 @@ class Action(BaseModel):
 class LLMResponse(BaseModel):
     thought_summary: str = ""
     hypothesis: str = ""
-    action: Action
+    # Either a single action OR a short batch the host runs in order
+    # (amortises the per-call prompt — big win on the no-cache CLI backend).
+    action: Action | None = None
+    actions: list[Action] = Field(default_factory=list)
     risk: Literal["low", "medium", "high"] = "low"
     needs_user_approval: bool = False
     notes_to_save: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _need_one(self) -> "LLMResponse":
+        if self.action is None and not self.actions:
+            raise ValueError("response needs 'action' or 'actions'")
+        return self
+
+    def steps(self) -> list[Action]:
+        return self.actions if self.actions else [self.action]  # type: ignore
 
 
 def parse_llm_response(text: str) -> LLMResponse:
