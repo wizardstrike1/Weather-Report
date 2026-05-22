@@ -1,6 +1,5 @@
+# NOTE: This ReadME is completely AI GENERATED!!!! for further specifications please dm wizardstrike1 on discord.
 # Weather Report
-# FULLY vibecoded thank you claude for making this for me
-the rest of this is the ai generated description of this application, but essentially its just a ctf solver linked up to claude code by default. dont use it cus it kinda sucks but it works but only sometimes. ur better off typing directly into a cli.
 
 *(Python package / launch module remains `ctf_copilot`.)*
 
