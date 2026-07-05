@@ -1,3 +1,5 @@
+i dont think this works right now but im not fixing it
+
 python -m venv .venv
 (windows: .venv\Scripts\activate   |  *nix: source .venv/bin/activate)
 pip install -r requirements.txt
